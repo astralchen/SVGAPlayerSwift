@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package com.opensource.svga;
+
+option swift_prefix = "Svga_";
+
+// Movie-level parameters
+message MovieParams {
+    float viewBoxWidth  = 1;
+    float viewBoxHeight = 2;
+    int32 fps           = 3;
+    int32 frames        = 4;
+}
+
+// Top-level movie container
+message MovieEntity {
+    string                  version = 1;
+    MovieParams             params  = 2;
+    map<string, bytes>      images  = 3;
+    repeated SpriteEntity   sprites = 4;
+    repeated AudioEntity    audios  = 5;
+}
+
+// Sprite (image layer)
+message SpriteEntity {
+    string               imageKey = 1;
+    repeated FrameEntity frames   = 2;
+    string               matteKey = 3;
+}
+
+// Per-frame data for a sprite
+message FrameEntity {
+    float               alpha     = 1;
+    Layout              layout    = 2;
+    Transform           transform = 3;
+    string              clipPath  = 4;
+    repeated ShapeEntity shapes   = 5;
+}
+
+// Bounding rectangle
+message Layout {
+    float x      = 1;
+    float y      = 2;
+    float width  = 3;
+    float height = 4;
+}
+
+// 2D affine transform matrix
+message Transform {
+    float a  = 1;
+    float b  = 2;
+    float c  = 3;
+    float d  = 4;
+    float tx = 5;
+    float ty = 6;
+}
+
+// Audio clip reference
+message AudioEntity {
+    string audioKey   = 1;
+    int32  startFrame = 2;
+    int32  endFrame   = 3;
+    int32  startTime  = 4;
+}
+
+// Vector shape
+message ShapeEntity {
+    enum ShapeType {
+        shapeTypeShape   = 0;
+        shapeTypeRect    = 1;
+        shapeTypeEllipse = 2;
+        shapeTypeKeep    = 3;
+    }
+
+    message ShapeArgs {
+        string d = 1;
+    }
+
+    message RectArgs {
+        float x            = 1;
+        float y            = 2;
+        float width        = 3;
+        float height       = 4;
+        float cornerRadius = 5;
+    }
+
+    message EllipseArgs {
+        float cx = 1;
+        float cy = 2;
+        float rx = 3;
+        float ry = 4;
+    }
+
+    message ShapeStyle {
+        enum LineCap {
+            lineCapButt   = 0;
+            lineCapRound  = 1;
+            lineCapSquare = 2;
+        }
+
+        enum LineJoin {
+            lineJoinMiter = 0;
+            lineJoinRound = 1;
+            lineJoinBevel = 2;
+        }
+
+        message RGBAColor {
+            float r = 1;
+            float g = 2;
+            float b = 3;
+            float a = 4;
+        }
+
+        RGBAColor fill        = 1;
+        RGBAColor stroke      = 2;
+        float     strokeWidth = 3;
+        LineCap   lineCap     = 4;
+        LineJoin  lineJoin    = 5;
+        float     miterLimit  = 6;
+        float     lineDashI   = 7;
+        float     lineDashII  = 8;
+        float     lineDashIII = 9;
+    }
+
+    ShapeType  type      = 1;
+    oneof args {
+        ShapeArgs   shape   = 2;
+        RectArgs    rect    = 3;
+        EllipseArgs ellipse = 4;
+    }
+    ShapeStyle style     = 5;
+    Transform  transform = 6;
+}
