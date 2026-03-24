@@ -27,7 +27,7 @@ public final class SVGAVideoSpriteEntity: @unchecked Sendable {
 
     @MainActor
     func requestLayer(bitmap: UIImage?) -> SVGAContentLayer {
-        let layer = SVGAContentLayer(frames: frames)
+        let layer = SVGAContentLayer(frames: frames, imageKey: imageKey)
         if let bitmap {
             let bitmapLayer = SVGABitmapLayer(frames: frames)
             bitmapLayer.contents = bitmap.cgImage

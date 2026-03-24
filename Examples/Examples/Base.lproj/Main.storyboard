@@ -2,6 +2,7 @@
 <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="24765" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="BYZ-38-t0r">
     <device id="retina6_12" orientation="portrait" appearance="light"/>
     <dependencies>
+        <deployment identifier="iOS"/>
         <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="24743"/>
         <capability name="Safe area layout guides" minToolsVersion="9.0"/>
         <capability name="System colors in document resources" minToolsVersion="11.0"/>
@@ -16,18 +17,24 @@
                         <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
-                            <view contentMode="scaleToFill" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="XL5-dP-aeF" customClass="SVGAImageView" customModule="SVGAPlayer">
-                                <rect key="frame" x="76" y="328" width="240" height="128"/>
-                                <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                <color key="backgroundColor" systemColor="systemBackgroundColor"/>
-                                <userDefinedRuntimeAttributes>
-                                    <userDefinedRuntimeAttribute type="string" keyPath="imageName" value="banner"/>
-                                </userDefinedRuntimeAttributes>
+                            <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="XL5-dP-aeF" customClass="SVGAImageView" customModule="SVGAPlayer">
+                                <rect key="frame" x="76.666666666666686" y="362" width="240" height="128"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="240" id="DTH-t5-oo8"/>
+                                    <constraint firstAttribute="width" secondItem="XL5-dP-aeF" secondAttribute="height" multiplier="15:8" id="kZZ-hB-MNy"/>
+                                </constraints>
                             </view>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                        <constraints>
+                            <constraint firstItem="XL5-dP-aeF" firstAttribute="centerY" secondItem="8bC-Xf-vdC" secondAttribute="centerY" id="8EQ-NW-iRt"/>
+                            <constraint firstItem="XL5-dP-aeF" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="B3P-AG-ol6"/>
+                        </constraints>
                     </view>
+                    <connections>
+                        <outlet property="imageView" destination="XL5-dP-aeF" id="oia-HP-tWR"/>
+                    </connections>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="dkx-z0-nzr" sceneMemberID="firstResponder"/>
             </objects>

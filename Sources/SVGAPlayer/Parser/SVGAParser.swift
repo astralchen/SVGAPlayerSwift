@@ -52,15 +52,12 @@ public actor SVGAParser {
 
     public func parse(named: String, in bundle: Bundle? = nil) async throws -> SVGAVideoEntity {
         let b = bundle ?? Bundle.main
-        let key = cacheKey(for: named)
-        if let cached = await SVGACacheStore.shared.read(key: key) {
-            return cached
-        }
         guard let fileURL = b.url(forResource: named, withExtension: "svga")
                ?? b.url(forResource: named, withExtension: nil) else {
             throw SVGAParserError.resourceNotFound(named)
         }
         let data = try Data(contentsOf: fileURL)
+        let key = md5(data)
         return try await parse(data: data, cacheKey: key)
     }
 
@@ -115,6 +112,11 @@ public actor SVGAParser {
 
     private func md5(_ string: String) -> String {
         let data = Data(string.utf8)
+        let digest = Insecure.MD5.hash(data: data)
+        return digest.map { String(format: "%02X", $0) }.joined()
+    }
+
+    private func md5(_ data: Data) -> String {
         let digest = Insecure.MD5.hash(data: data)
         return digest.map { String(format: "%02X", $0) }.joined()
     }

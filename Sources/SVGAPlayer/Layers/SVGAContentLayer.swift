@@ -48,10 +48,16 @@ final class SVGAContentLayer: CALayer {
 
     // MARK: Step
 
+    private var _firstVisible = true
+
     func stepToFrame(_ frame: Int) {
         guard !dynamicHidden, frame < frames.count else { return }
         let frameItem = frames[frame]
         if frameItem.alpha > 0 {
+            if _firstVisible {
+                _firstVisible = false
+                print("[SVGAStep] first visible frame=\(frame) imageKey=\(imageKey) layout=\(frameItem.layout) alpha=\(frameItem.alpha) transform=\(frameItem.transform) nx=\(frameItem.nx) ny=\(frameItem.ny) bitmapLayer=\(bitmapLayer != nil)")
+            }
             isHidden = false
             opacity = Float(frameItem.alpha)
             position = .zero

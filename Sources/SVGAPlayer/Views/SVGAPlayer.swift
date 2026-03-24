@@ -213,6 +213,8 @@ public class SVGAPlayer: UIView {
     }
     private func draw() {
         guard let item = videoItem else { return }
+        print("[SVGADraw] draw() start: videoSize=\(item.videoSize) fps=\(item.fps) frames=\(item.frames) sprites=\(item.sprites.count)")
+        print("[SVGADraw] self.bounds=\(bounds) self.frame=\(frame)")
         let dl = CALayer()
         dl.frame = CGRect(origin: .zero, size: item.videoSize)
         dl.masksToBounds = true
@@ -250,6 +252,10 @@ public class SVGAPlayer: UIView {
         contentLayers = tempContentLayers
         layer.addSublayer(dl)
         drawLayer = dl
+        print("[SVGADraw] draw() done: contentLayers=\(contentLayers.count) dl.frame=\(dl.frame) item.images.keys=\(item.images.keys.sorted())")
+        for (i, cl) in contentLayers.enumerated() {
+            print("[SVGADraw]   contentLayer[\(i)] imageKey=\(cl.imageKey) frame=\(cl.frame) hidden=\(cl.isHidden) opacity=\(cl.opacity) bitmapLayer=\(cl.bitmapLayer != nil) vectorLayer=\(cl.vectorLayer != nil)")
+        }
         let layers = item.audios.map { SVGAAudioLayer(audioItem: $0, videoItem: item) }
         audioLayers = layers
         update()
@@ -280,40 +286,66 @@ public class SVGAPlayer: UIView {
     }
 
     private func resize() {
-        guard let item = videoItem, let dl = drawLayer else { return }
+        guard let item = videoItem, let dl = drawLayer else {
+            print("[SVGAResize] resize() skipped: videoItem=\(videoItem != nil) drawLayer=\(drawLayer != nil)")
+            return
+        }
         let vs = item.videoSize
         let bs = bounds.size
-        guard vs.width > 0, vs.height > 0, bs.width > 0, bs.height > 0 else { return }
+        print("[SVGAResize] resize() videoSize=\(vs) bounds=\(bs) contentMode=\(contentMode.rawValue)")
+        guard vs.width > 0, vs.height > 0, bs.width > 0, bs.height > 0 else {
+            print("[SVGAResize] resize() guard failed")
+            return
+        }
         let videoRatio = vs.width / vs.height
         let layerRatio = bs.width / bs.height
+        // CALayer applies transforms around anchorPoint (default 0.5,0.5 = layer center).
+        // For uniform scale r with desired top-left at (dx, dy) in superlayer coords:
+        //   tx = (r-1)*vs.width/2 + dx
+        //   ty = (r-1)*vs.height/2 + dy
         let t: CGAffineTransform
         switch contentMode {
         case .scaleAspectFit:
+            let r: CGFloat
+            let dx: CGFloat
+            let dy: CGFloat
             if videoRatio > layerRatio {
-                let r = bs.width / vs.width
-                let offsetY = (bs.height - vs.height * r) / 2
-                t = CGAffineTransform(a: r, b: 0, c: 0, d: r, tx: 0, ty: offsetY)
+                r = bs.width / vs.width
+                dx = 0
+                dy = (bs.height - vs.height * r) / 2
             } else {
-                let r = bs.height / vs.height
-                let offsetX = (bs.width - vs.width * r) / 2
-                t = CGAffineTransform(a: r, b: 0, c: 0, d: r, tx: offsetX, ty: 0)
+                r = bs.height / vs.height
+                dx = (bs.width - vs.width * r) / 2
+                dy = 0
             }
+            t = CGAffineTransform(a: r, b: 0, c: 0, d: r,
+                                  tx: (r - 1) * vs.width / 2 + dx,
+                                  ty: (r - 1) * vs.height / 2 + dy)
         case .scaleAspectFill:
+            let r: CGFloat
+            let dx: CGFloat
+            let dy: CGFloat
             if videoRatio < layerRatio {
-                let r = bs.width / vs.width
-                let offsetY = (bs.height - vs.height * r) / 2
-                t = CGAffineTransform(a: r, b: 0, c: 0, d: r, tx: 0, ty: offsetY)
+                r = bs.width / vs.width
+                dx = 0
+                dy = (bs.height - vs.height * r) / 2
             } else {
-                let r = bs.height / vs.height
-                let offsetX = (bs.width - vs.width * r) / 2
-                t = CGAffineTransform(a: r, b: 0, c: 0, d: r, tx: offsetX, ty: 0)
+                r = bs.height / vs.height
+                dx = (bs.width - vs.width * r) / 2
+                dy = 0
             }
+            t = CGAffineTransform(a: r, b: 0, c: 0, d: r,
+                                  tx: (r - 1) * vs.width / 2 + dx,
+                                  ty: (r - 1) * vs.height / 2 + dy)
         default:
-            let sx = bs.width / vs.width
-            let sy = bs.height / vs.height
-            t = CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: 0, ty: 0)
+            // Matches ObjC .top: uniform scale to fit width, top-aligned
+            let r = bs.width / vs.width
+            t = CGAffineTransform(a: r, b: 0, c: 0, d: r,
+                                  tx: (r - 1) * vs.width / 2,
+                                  ty: (r - 1) * vs.height / 2)
         }
         dl.transform = CATransform3DMakeAffineTransform(t)
+        print("[SVGAResize] applied transform=\(t) to drawLayer")
     }
 
     // MARK: - Dynamic objects

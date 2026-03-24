@@ -9,6 +9,7 @@ final class SVGABitmapLayer: CALayer {
         super.init()
         backgroundColor = UIColor.clear.cgColor
         masksToBounds = false
+        contentsGravity = .resizeAspect
     }
 
     override init(layer: Any) {

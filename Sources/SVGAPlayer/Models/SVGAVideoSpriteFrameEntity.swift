@@ -31,9 +31,15 @@ public final class SVGAVideoSpriteFrameEntity: @unchecked Sendable {
         layout = CGRect(x: CGFloat(l.x), y: CGFloat(l.y),
                         width: CGFloat(l.width), height: CGFloat(l.height))
         let t = protoObject.transform
-        transform = CGAffineTransform(a: CGFloat(t.a), b: CGFloat(t.b),
-                                      c: CGFloat(t.c), d: CGFloat(t.d),
-                                      tx: CGFloat(t.tx), ty: CGFloat(t.ty))
+        // Proto3 default: unset transform has all fields = 0, which is a degenerate (zero-scale)
+        // matrix — treat it as identity to avoid collapsing the layer to zero size.
+        if t.a == 0 && t.b == 0 && t.c == 0 && t.d == 0 {
+            transform = .identity
+        } else {
+            transform = CGAffineTransform(a: CGFloat(t.a), b: CGFloat(t.b),
+                                          c: CGFloat(t.c), d: CGFloat(t.d),
+                                          tx: CGFloat(t.tx), ty: CGFloat(t.ty))
+        }
         clipPath = protoObject.clipPath.isEmpty ? nil : protoObject.clipPath
         shapes = protoObject.shapes
         (nx, ny) = Self.computeNXNY(transform: transform, layout: layout)

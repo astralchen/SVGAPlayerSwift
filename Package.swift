@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "SVGAPlayer",
     platforms: [
-        .iOS(.v13)
+        .iOS(.v14)
     ],
     products: [
         .library(
@@ -37,7 +37,11 @@ let package = Package(
         .testTarget(
             name: "SVGAPlayerTests",
             dependencies: ["SVGAPlayer"],
-            path: "Tests/SVGAPlayerTests"
+            path: "Tests/SVGAPlayerTests",
+            resources: [
+                .copy("Resources/banner.svga"),
+                .copy("Resources/bubble.svga")
+            ]
         )
     ],
     swiftLanguageModes: [.v6]
