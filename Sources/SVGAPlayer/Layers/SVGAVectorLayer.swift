@@ -261,9 +261,12 @@ final class SVGAVectorLayer: CALayer {
         default:     sl.lineJoin = .miter
         }
         sl.miterLimit = CGFloat(s.miterLimit)
-        let d0 = s.lineDashI < 1.0 ? Float(1.0) : s.lineDashI
-        let d1 = s.lineDashIi < 0.1 ? Float(0.1) : s.lineDashIi
-        if d0 > 0 || d1 > 0 {
+        // Only apply dash pattern when the encoder explicitly set lineDashI > 0.
+        // Proto3 defaults lineDashI/II to 0 ("no dash"); clamping then checking
+        // the clamped value would always be true and apply dashes to every shape.
+        if s.lineDashI > 0 {
+            let d0 = s.lineDashI < 1.0 ? Float(1.0) : s.lineDashI
+            let d1 = s.lineDashIi < 0.1 ? Float(0.1) : s.lineDashIi
             sl.lineDashPhase = CGFloat(s.lineDashIii)
             sl.lineDashPattern = [NSNumber(value: d0), NSNumber(value: d1)]
         }
