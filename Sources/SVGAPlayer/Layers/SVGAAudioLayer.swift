@@ -1,5 +1,6 @@
 import AVFoundation
 
+@MainActor
 final class SVGAAudioLayer {
     let audioItem: SVGAAudioEntity
     let audioPlayer: AVAudioPlayer?

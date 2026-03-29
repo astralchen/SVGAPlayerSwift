@@ -8,22 +8,23 @@ final class SVGAContentLayer: CALayer {
     }
     var dynamicDrawingBlock: SVGAPlayerDynamicDrawingBlock?
 
-    nonisolated(unsafe) var bitmapLayer: SVGABitmapLayer? {
+    var bitmapLayer: SVGABitmapLayer? {
         didSet {
             oldValue?.removeFromSuperlayer()
             if let l = bitmapLayer { addSublayer(l) }
         }
     }
-    nonisolated(unsafe) var vectorLayer: SVGAVectorLayer? {
+    var vectorLayer: SVGAVectorLayer? {
         didSet {
             oldValue?.removeFromSuperlayer()
             if let l = vectorLayer { addSublayer(l) }
         }
     }
-    nonisolated(unsafe) var textLayer: CATextLayer?
+    var textLayer: CATextLayer?
 
     private let frames: [SVGAVideoSpriteFrameEntity]
-    nonisolated(unsafe) private var textLayerAlignment: NSTextAlignment = .center
+    private var textLayerAlignment: NSTextAlignment = .center
+    private var lastClipPath: CGPath?
 
     init(frames: [SVGAVideoSpriteFrameEntity], imageKey: String = "") {
         self.frames = frames
@@ -48,16 +49,10 @@ final class SVGAContentLayer: CALayer {
 
     // MARK: Step
 
-    private var _firstVisible = true
-
     func stepToFrame(_ frame: Int) {
-        guard !dynamicHidden, frame < frames.count else { return }
+        guard !dynamicHidden, frame >= 0, frame < frames.count else { return }
         let frameItem = frames[frame]
         if frameItem.alpha > 0 {
-            if _firstVisible {
-                _firstVisible = false
-                print("[SVGAStep] first visible frame=\(frame) imageKey=\(imageKey) layout=\(frameItem.layout) alpha=\(frameItem.alpha) transform=\(frameItem.transform) nx=\(frameItem.nx) ny=\(frameItem.ny) bitmapLayer=\(bitmapLayer != nil)")
-            }
             isHidden = false
             opacity = Float(frameItem.alpha)
             position = .zero
@@ -68,13 +63,20 @@ final class SVGAContentLayer: CALayer {
             let offsetY = self.frame.origin.y - frameItem.ny
             position = CGPoint(x: position.x - offsetX, y: position.y - offsetY)
             if let maskSrc = frameItem.maskLayer as? CAShapeLayer {
-                let clone = CAShapeLayer()
-                clone.path = maskSrc.path
-                clone.fillColor = maskSrc.fillColor
-                mask = clone
-            } else {
+                if lastClipPath != maskSrc.path {
+                    let clone = CAShapeLayer()
+                    clone.path = maskSrc.path
+                    clone.fillColor = maskSrc.fillColor
+                    mask = clone
+                    lastClipPath = maskSrc.path
+                }
+            } else if mask != nil {
                 mask = nil
+                lastClipPath = nil
             }
+            bitmapLayer?.frame = bounds
+            vectorLayer?.frame = bounds
+            layoutTextLayer()
             bitmapLayer?.stepToFrame(frame)
             vectorLayer?.stepToFrame(frame)
         } else {
@@ -83,17 +85,9 @@ final class SVGAContentLayer: CALayer {
         dynamicDrawingBlock?(self, frame)
     }
 
-    // MARK: Frame override (text layer alignment)
+    // MARK: Text layout
 
-    override var frame: CGRect {
-        didSet {
-            bitmapLayer?.frame = bounds
-            vectorLayer?.frame = bounds
-            layoutTextLayer()
-        }
-    }
-
-    nonisolated private func layoutTextLayer() {
+    private func layoutTextLayer() {
         guard let tl = textLayer else { return }
         var f = tl.frame
         switch textLayerAlignment {

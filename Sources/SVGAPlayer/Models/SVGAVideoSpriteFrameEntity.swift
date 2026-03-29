@@ -7,14 +7,12 @@ public final class SVGAVideoSpriteFrameEntity: @unchecked Sendable {
     public let nx: CGFloat
     public let ny: CGFloat
     public let clipPath: String?
-    public let shapes: [Any]
+    let shapes: [SVGAShapeEntity]
 
-    private var _maskLayer: CALayer?
-    private let maskLock = NSLock()
+    @MainActor private var _maskLayer: CALayer?
 
+    @MainActor
     public var maskLayer: CALayer? {
-        maskLock.lock()
-        defer { maskLock.unlock() }
         if _maskLayer == nil, let path = clipPath, !path.isEmpty {
             let bezier = SVGABezierPath()
             bezier.setValues(path)
@@ -41,7 +39,7 @@ public final class SVGAVideoSpriteFrameEntity: @unchecked Sendable {
                                           tx: CGFloat(t.tx), ty: CGFloat(t.ty))
         }
         clipPath = protoObject.clipPath.isEmpty ? nil : protoObject.clipPath
-        shapes = protoObject.shapes
+        shapes = protoObject.shapes.map { SVGAShapeEntity(protoObject: $0) }
         (nx, ny) = Self.computeNXNY(transform: transform, layout: layout)
     }
 
@@ -72,7 +70,7 @@ public final class SVGAVideoSpriteFrameEntity: @unchecked Sendable {
 
         let cp = jsonObject["clipPath"] as? String
         clipPath = (cp?.isEmpty == false) ? cp : nil
-        shapes = (jsonObject["shapes"] as? [Any]) ?? []
+        shapes = (jsonObject["shapes"] as? [[String: Any]])?.compactMap { SVGAShapeEntity(jsonObject: $0) } ?? []
         (nx, ny) = Self.computeNXNY(transform: transform, layout: layout)
     }
 

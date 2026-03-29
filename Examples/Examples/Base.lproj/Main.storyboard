@@ -17,7 +17,7 @@
                         <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
-                            <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="XL5-dP-aeF" customClass="SVGAImageView" customModule="SVGAPlayer">
+                            <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="XL5-dP-aeF" customClass="SVGAPlayerView" customModule="SVGAPlayer">
                                 <rect key="frame" x="76.666666666666686" y="362" width="240" height="128"/>
                                 <constraints>
                                     <constraint firstAttribute="width" constant="240" id="DTH-t5-oo8"/>

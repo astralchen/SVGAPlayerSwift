@@ -1,29 +1,44 @@
 import UIKit
 
+@MainActor
 final class SVGABezierPath: UIBezierPath {
     private var displaying = false
     private var backValues: String = ""
+
+    private static let maxPathLength = 100_000
 
     func setValues(_ values: String) {
         guard displaying else {
             backValues = values
             return
         }
-        let validMethods: Set<String> = ["M","L","H","V","C","S","Q","R","A","Z",
-                                          "m","l","h","v","c","s","q","r","a","z"]
-        var v = values
-        v = v.replacingOccurrences(of: "([a-zA-Z])", with: "|||$1 ",
-                                   options: .regularExpression, range: v.startIndex..<v.endIndex)
-        v = v.replacingOccurrences(of: ",", with: " ")
-        let segments = v.components(separatedBy: "|||")
-        for segment in segments {
-            guard !segment.isEmpty else { continue }
-            let firstLetter = String(segment.prefix(1))
-            guard validMethods.contains(firstLetter) else { continue }
-            let rest = String(segment.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
-            let args = rest.components(separatedBy: " ").filter { !$0.isEmpty }
-            operate(method: firstLetter, args: args)
+        guard values.count <= Self.maxPathLength else { return }
+        let validMethods: Set<Character> = ["M","L","H","V","C","S","Q","R","A","Z",
+                                             "m","l","h","v","c","s","q","r","a","z"]
+        var method: String?
+        var argBuffer = ""
+
+        func flush() {
+            guard let m = method else { return }
+            let trimmed = argBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            let args = trimmed.isEmpty ? [] : trimmed.split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init)
+            operate(method: m, args: args)
+            argBuffer = ""
         }
+
+        for ch in values {
+            if validMethods.contains(ch) {
+                flush()
+                method = String(ch)
+            } else {
+                if ch == "," {
+                    argBuffer.append(" ")
+                } else {
+                    argBuffer.append(ch)
+                }
+            }
+        }
+        flush()
     }
 
     func createLayer() -> CAShapeLayer {
