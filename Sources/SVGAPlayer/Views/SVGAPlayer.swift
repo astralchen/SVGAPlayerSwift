@@ -90,34 +90,38 @@ public final class SVGAPlayer {
     private var currentRange: Range<Int> = 0..<0
     private var forwardAnimating: Bool = false
     private var reversing: Bool = false
+    private var notificationObservers: [any NSObjectProtocol] = []
 
     // MARK: - Init / Lifecycle
 
     public init() {
         let nc = NotificationCenter.default
-        nc.addObserver(self, selector: #selector(appDidEnterBackground),
-                       name: UIApplication.didEnterBackgroundNotification, object: nil)
-        nc.addObserver(self, selector: #selector(appWillEnterForeground),
-                       name: UIApplication.willEnterForegroundNotification, object: nil)
+        notificationObservers.append(
+            nc.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                           object: nil, queue: nil) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard self.displayLink != nil else { return }
+                    self.displayLink?.isPaused = true
+                    self.clearAudios()
+                }
+            }
+        )
+        notificationObservers.append(
+            nc.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                           object: nil, queue: nil) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.displayLink?.isPaused = false
+                }
+            }
+        )
     }
 
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    /// App 进入后台时暂停 DisplayLink 和音频，节省 CPU/电量。
-    @objc private func appDidEnterBackground() {
-        MainActor.assumeIsolated {
-            guard displayLink != nil else { return }
-            displayLink?.isPaused = true
-            clearAudios()
-        }
-    }
-
-    /// App 回到前台时恢复 DisplayLink。
-    @objc private func appWillEnterForeground() {
-        MainActor.assumeIsolated {
-            displayLink?.isPaused = false
+    isolated deinit {
+        let nc = NotificationCenter.default
+        for observer in notificationObservers {
+            nc.removeObserver(observer)
         }
     }
 
@@ -405,10 +409,12 @@ public final class SVGAPlayer {
             return
         }
         update()
-        delegate?.svgaPlayer(self, didAnimateToFrame: currentFrame)
-        if item.frames > 0 {
-            delegate?.svgaPlayer(self, didAnimateToPercentage: CGFloat(currentFrame + 1) / CGFloat(item.frames))
-        }
+        let frame = currentFrame
+        delegate?.svgaPlayer(self, didAnimateToFrame: frame)
+        // delegate 回调可能已调用 stopAnimation/startAnimation 改变状态，
+        // 需检查 displayLink 是否仍有效（即动画未被中断）。
+        guard displayLink != nil, item.frames > 0 else { return }
+        delegate?.svgaPlayer(self, didAnimateToPercentage: CGFloat(frame + 1) / CGFloat(item.frames))
     }
 
     /// 步进所有 contentLayer 到当前帧，同步音频播放。
@@ -448,9 +454,7 @@ private final class DisplayLinkProxy: NSObject {
     }
 
     /// CADisplayLink 回调入口，在主线程 RunLoop 中调用。
-    @objc nonisolated func tick() {
-        MainActor.assumeIsolated {
-            callback()
-        }
+    @objc func tick() {
+        callback()
     }
 }
