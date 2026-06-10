@@ -169,13 +169,11 @@ public class SVGAPlayerView: UIView {
 
     public override init(frame: CGRect) {
         super.init(frame: frame)
-        contentMode = .top
         setupEngine()
     }
 
     public required init?(coder: NSCoder) {
         super.init(coder: coder)
-        contentMode = .top
         setupEngine()
     }
 
