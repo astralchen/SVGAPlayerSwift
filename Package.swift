@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "SVGAPlayer",
+    name: "SVGAView",
     platforms: [
         .iOS(.v14)
     ],
     products: [
         .library(
-            name: "SVGAPlayer",
-            targets: ["SVGAPlayer"]
+            name: "SVGAView",
+            targets: ["SVGAView"]
         )
     ],
     dependencies: [
@@ -18,12 +18,12 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "SVGAPlayer",
+            name: "SVGAView",
             dependencies: [
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "ZIPFoundation", package: "ZIPFoundation")
             ],
-            path: "Sources/SVGAPlayer",
+            path: "Sources/SVGAView",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")
             ],
@@ -35,9 +35,9 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "SVGAPlayerTests",
-            dependencies: ["SVGAPlayer"],
-            path: "Tests/SVGAPlayerTests",
+            name: "SVGAViewTests",
+            dependencies: ["SVGAView"],
+            path: "Tests/SVGAViewTests",
             resources: [
                 .copy("Resources/banner.svga"),
                 .copy("Resources/bubble.svga")

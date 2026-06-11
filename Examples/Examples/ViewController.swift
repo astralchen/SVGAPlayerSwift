@@ -6,11 +6,9 @@
 //
 
 import UIKit
-import SVGAPlayer
+import SVGAView
 
 class ViewController: UIViewController {
-
-    @IBOutlet weak var imageView: SVGAPlayerView!
 
     private enum StageState {
         case hidden
@@ -23,7 +21,7 @@ class ViewController: UIViewController {
     private let currentGiftLabel = UILabel()
     private let summaryLabel = PaddedLabel()
     private let stageView = UIView()
-    private let playerView = SVGAPlayerView()
+    private let playerView = SVGAView()
     private let stateLabel = UILabel()
     private let downloadProgressStack = UIStackView()
     private let downloadProgressView = UIProgressView(progressViewStyle: .default)
@@ -61,7 +59,6 @@ class ViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        imageView?.removeFromSuperview()
         configureLayout()
         configurePlaybackCallbacks()
         loadGiftEffects()
@@ -269,23 +266,22 @@ private extension ViewController {
     }
 
     func configurePlaybackCallbacks() {
-        playerView.onFrameChanged = { [weak self] _ in
-            guard let self, self.stageState == .loading else { return }
-            self.hideState()
-        }
-
-        playerView.onDownloadProgress = { [weak self] progress in
-            self?.showDownloadProgress(progress)
-        }
-
-        playerView.onLoadFailed = { [weak self] _ in
-            self?.showState("加载失败\n点击重播重试", state: .error)
-        }
-
-        playerView.onFinished = { [weak self] in
-            guard let self, !self.isLooping else { return }
-            self.isPaused = true
-            self.updatePauseButton()
+        playerView.onEvent = { [weak self] event in
+            switch event {
+            case .frameChanged:
+                guard let self, self.stageState == .loading else { return }
+                self.hideState()
+            case .downloadProgress(let progress):
+                self?.showDownloadProgress(progress)
+            case .loadFailed:
+                self?.showState("加载失败\n点击重播重试", state: .error)
+            case .finished:
+                guard let self, !self.isLooping else { return }
+                self.isPaused = true
+                self.updatePauseButton()
+            default:
+                break
+            }
         }
     }
 }

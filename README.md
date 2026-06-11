@@ -1,6 +1,6 @@
-# SVGAPlayerSwift
+# SVGAView
 
-A lightweight, high-performance SVGA animation player for iOS, built with Swift 6 strict concurrency.
+A lightweight, high-performance SVGA animation view for iOS, built with Swift 6 strict concurrency.
 
 Supports both **Proto 2.x** and **JSON 1.x** SVGA formats, with audio playback, dynamic content replacement, and frame-level control.
 
@@ -16,7 +16,7 @@ Supports both **Proto 2.x** and **JSON 1.x** SVGA formats, with audio playback, 
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/astralchen/SVGAPlayerSwift.git", from: "1.0.0")
+    .package(url: "https://github.com/astralchen/SVGAView.git", from: "1.0.0")
 ]
 ```
 
@@ -25,9 +25,9 @@ Or in Xcode: **File > Add Package Dependencies**, enter the repository URL.
 ## Quick Start
 
 ```swift
-import SVGAPlayer
+import SVGAView
 
-let playerView = SVGAPlayerView(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+let playerView = SVGAView(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
 playerView.contentMode = .scaleAspectFit
 view.addSubview(playerView)
 
@@ -51,6 +51,35 @@ playerView.play(named: "effect", in: frameworkBundle)
 ```swift
 let url = URL(string: "https://cdn.example.com/animation.svga")!
 playerView.play(url: url)
+```
+
+### Load Without Auto-Play
+
+Use `load(...)` when you need to await readiness before starting playback:
+
+```swift
+try await playerView.load(named: "banner")
+playerView.startAnimation()
+
+try await playerView.load(url: url)
+try await playerView.load(request: URLRequest(url: url))
+try await playerView.load(fileURL: localFileURL)
+try await playerView.load(data: svgaData, cacheKey: "gift-v1")
+```
+
+You can also route through `SVGAViewSource` when the source is selected dynamically:
+
+```swift
+let source = SVGAViewSource.request(URLRequest(url: url))
+try await playerView.load(source: source)
+```
+
+### Additional Play Sources
+
+```swift
+playerView.play(request: URLRequest(url: url))
+playerView.play(fileURL: localFileURL)
+playerView.play(data: svgaData, cacheKey: "gift-v1")
 ```
 
 ### Playback Control
@@ -86,29 +115,61 @@ content.setDrawingBlock({ layer, frame in
 playerView.play(named: "gift", dynamicContent: content)
 ```
 
+Update dynamic content after the SVGA has loaded:
+
+```swift
+playerView.setImage(avatarImage, forKey: "avatar")
+playerView.setAttributedText(nicknameText, forKey: "username")
+playerView.setHidden(false, forKey: "badge")
+playerView.setDrawingBlock({ layer, frame in
+    // custom drawing each frame
+}, forKey: "effect")
+
+playerView.removeImage(forKey: "avatar")
+playerView.removeAttributedText(forKey: "username")
+playerView.removeDrawingBlock(forKey: "effect")
+playerView.removeHidden(forKey: "badge")
+playerView.clearDynamicContent()
+```
+
+Image keys may be passed either as the original SVGA `imageKey` or without the file extension.
+
 ### Event Callbacks
 
 ```swift
-playerView.onFinished = {
-    print("animation finished")
-}
-
-playerView.onFrameChanged = { frame in
-    print("current frame: \(frame)")
-}
-
-playerView.onPercentageChanged = { percentage in
-    print("playback progress: \(percentage)")
-}
-
-playerView.onDownloadProgress = { progress in
-    print("download progress: \(progress)")
-}
-
-playerView.onLoadFailed = { error in
-    print("load failed: \(error)")
+playerView.onEvent = { event in
+    switch event {
+    case .stateChanged(let state):
+        print("state changed: \(state)")
+    case .ready:
+        print("animation is ready")
+    case .finished:
+        print("animation finished")
+    case .frameChanged(let frame):
+        print("current frame: \(frame)")
+    case .percentageChanged(let percentage):
+        print("playback progress: \(percentage)")
+    case .downloadProgress(let progress):
+        print("download progress: \(progress)")
+    case .loadFailed(let error):
+        print("load failed: \(error)")
+    }
 }
 ```
+
+`SVGAViewEvent` is the single callback surface for loading, playback, frame, percentage, download progress, and failure events.
+
+`state` is exposed as `SVGAViewState` with `idle`, `loading`, `ready`, `playing`, `paused`, `stopped`, and `failed(SVGAViewError)`.
+
+### Cancellation
+
+```swift
+playerView.cancelLoading()
+playerView.clear()         // also cancels an in-flight load
+playerView.stopAnimation() // cancels an in-flight load, or stops playback
+```
+
+Starting a new load cancels the previous pending load. Stale completions are ignored.
 
 ### Configuration
 
@@ -121,45 +182,31 @@ playerView.autoPlay = true        // Auto-play after loading (default true)
 
 ### Interface Builder
 
-Set the custom class to `SVGAPlayerView` in Interface Builder, then configure:
+Set the custom class to `SVGAView` in Interface Builder, then configure:
 
-- **filePath** — Bundle resource name or HTTP(S) URL string
+- **filePath** — Bundle resource name, HTTP(S) URL, file URL, or absolute local path
 - **autoPlay** — Auto-play on load
 
-### Export Frames
-
-```swift
-let entity = try await SVGAParser.shared.parse(named: "animation")
-let exporter = SVGAExporter()
-exporter.videoItem = entity
-
-// Export as UIImage array
-let images = exporter.toImages()
-
-// Save as PNG sequence
-exporter.saveImages(to: "/path/to/output", filePrefix: "frame_")
-```
+`filePath` loading is deferred until the view has finished initialization.
 
 ## Architecture
 
 ```
-SVGAPlayerView (UIView)
-  └── SVGAPlayer (Animation Engine)
+SVGAView (UIView)
+  └── Internal animation engine
         ├── CADisplayLink (frame timing)
-        ├── SVGAContentLayer[] (sprite rendering)
-        │     ├── SVGABitmapLayer (bitmap)
-        │     └── SVGAVectorLayer (vector shapes)
-        └── SVGAAudioLayer[] (audio sync)
+        ├── Sprite rendering layers
+        │     ├── Bitmap layers
+        │     └── Vector shape layers
+        ├── Audio sync
+        └── SVGA parsing and caching
 
-SVGAParser (actor)
-  ├── SVGADecompressor (zlib / ZIP)
-  └── SVGACacheStore (memory cache)
+Public API:
+  └── SVGAView and its playback configuration types
 ```
 
-- **SVGAPlayerView** — Public UIView, provides play/stop/callback API
-- **SVGAPlayer** — Pure animation engine, no UIView dependency
-- **SVGAParser** — Async SVGA file parser with built-in caching
-- **SVGAExporter** — Frame-by-frame image export
+- **SVGAView** — Public UIView, provides loading, playback, controls, callbacks, and dynamic content.
+- Parser, model, renderer, cache, audio, and exporter types are internal implementation details.
 
 ## Security
 
@@ -167,7 +214,7 @@ SVGAParser (actor)
 - Decompression size limits (zlib and ZIP, 100 MB)
 - Download size limit (configurable, default 50 MB)
 - SHA256 cache keys
-- HTTPS-only for URL scheme validation
+- HTTP(S)-only validation for remote URLs; local file URLs use file loading APIs
 - Input range clamping (fps, frames, percentages)
 
 ## License

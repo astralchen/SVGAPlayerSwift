@@ -1,5 +1,9 @@
 import UIKit
 
+/// 将 SVGA path 字符串转换为 Core Animation shape layer 的路径对象。
+///
+/// 该类型支持播放器当前需要的 SVG path 命令子集，并限制输入长度以避免
+/// 解析异常路径时占用过多内存。
 @MainActor
 final class SVGABezierPath: UIBezierPath {
     private var displaying = false
@@ -7,6 +11,11 @@ final class SVGABezierPath: UIBezierPath {
 
     private static let maxPathLength = 100_000
 
+    /// 设置要解析的 path 字符串。
+    ///
+    /// 如果当前对象尚未用于显示，path 字符串会延迟到 `createLayer()` 时解析。
+    ///
+    /// - Parameter values: SVGA path 字符串。
     func setValues(_ values: String) {
         guard displaying else {
             backValues = values
@@ -41,6 +50,9 @@ final class SVGABezierPath: UIBezierPath {
         flush()
     }
 
+    /// 创建使用当前 path 的 shape layer。
+    ///
+    /// - Returns: 包含当前 bezier path 的 shape layer。
     func createLayer() -> CAShapeLayer {
         if !displaying {
             displaying = true

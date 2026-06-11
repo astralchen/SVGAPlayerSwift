@@ -2,42 +2,57 @@ import UIKit
 import SwiftProtobuf
 import CryptoKit
 
-/// 网络下载进度回调，取值范围为 0.0 ~ 1.0。
-public typealias SVGADownloadProgressHandler = @Sendable (_ progress: Double) -> Void
-
-/// SVGA 文件解析器，支持 Proto 2.x 和 JSON 1.x 两种格式。
+/// SVGA 网络下载进度回调。
 ///
-/// 使用共享实例 `SVGAParser.shared` 进行解析，内置内存缓存和磁盘缓存。
+/// 回调参数位于 `0.0...1.0` 范围内。
+typealias SVGADownloadProgressHandler = @Sendable (_ progress: Double) -> Void
+
+/// 解析 SVGA 文件的 actor。
+///
+/// `SVGAParser` 支持 SVGA 2.x Proto 格式和 SVGA 1.x JSON 格式。
+/// 解析器会复用内存缓存和磁盘缓存，并在需要时自动解压 ZIP 或 zlib 数据。
 ///
 /// ```swift
-/// // 从 Bundle 加载
 /// let entity = try await SVGAParser.shared.parse(named: "banner")
-///
-/// // 从网络加载
 /// let entity = try await SVGAParser.shared.parse(url: url)
-///
-/// // 从原始数据加载
 /// let entity = try await SVGAParser.shared.parse(data: svgaData, cacheKey: "myKey")
 /// ```
-public actor SVGAParser {
-    public static let shared = SVGAParser()
+actor SVGAParser {
+    static let shared = SVGAParser()
 
-    /// 是否启用内存强缓存，默认 true。关闭后仍使用弱引用缓存。
-    public var enabledMemoryCache: Bool = true
+    /// 一个布尔值，指示是否启用强引用内存缓存。
+    ///
+    /// 默认值为 `true`。设置为 `false` 后，解析器仍会写入弱引用缓存。
+    var enabledMemoryCache: Bool = true
 
-    /// 网络下载最大文件大小（字节），超出抛出 `fileTooLarge`，默认 50 MB。
-    public var maxDownloadSize: Int = 50_000_000
+    /// 允许下载的最大 SVGA 文件大小，单位为字节。
+    ///
+    /// 下载数据超过该值时会抛出 `SVGAParserError.fileTooLarge`。
+    /// 默认值为 50 MB。
+    var maxDownloadSize: Int = 50_000_000
 
     // MARK: - Public API
 
-    /// 从 URL 下载并解析 SVGA 文件。
-    public func parse(url: URL, progressHandler: SVGADownloadProgressHandler? = nil) async throws -> SVGAVideoEntity {
+    /// 从远程 URL 下载并解析 SVGA 文件。
+    ///
+    /// - Parameters:
+    ///   - url: SVGA 文件的远程 URL。
+    ///   - progressHandler: 可选的下载进度回调。
+    /// - Returns: 解析后的动画实体。
+    /// - Throws: 下载、解压或解析失败时抛出错误。
+    func parse(url: URL, progressHandler: SVGADownloadProgressHandler? = nil) async throws -> SVGA.VideoEntity {
         let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 20)
         return try await parse(request: request, progressHandler: progressHandler)
     }
 
-    /// 从自定义 URLRequest 下载并解析 SVGA 文件。
-    public func parse(request: URLRequest, progressHandler: SVGADownloadProgressHandler? = nil) async throws -> SVGAVideoEntity {
+    /// 使用自定义请求下载并解析 SVGA 文件。
+    ///
+    /// - Parameters:
+    ///   - request: 用于下载 SVGA 文件的请求。
+    ///   - progressHandler: 可选的下载进度回调。
+    /// - Returns: 解析后的动画实体。
+    /// - Throws: 下载、解压或解析失败时抛出错误。
+    func parse(request: URLRequest, progressHandler: SVGADownloadProgressHandler? = nil) async throws -> SVGA.VideoEntity {
         guard let url = request.url else {
             throw SVGAParserError.invalidURL
         }
@@ -58,8 +73,16 @@ public actor SVGAParser {
         return try await parse(data: data, cacheKey: key)
     }
 
-    /// 从原始数据解析 SVGA，自动检测 ZIP/zlib 格式并解压。
-    public func parse(data: Data, cacheKey key: String) async throws -> SVGAVideoEntity {
+    /// 从原始数据解析 SVGA 文件。
+    ///
+    /// 解析器会自动检测 ZIP 和 zlib 数据，并将解压后的文件写入磁盘缓存。
+    ///
+    /// - Parameters:
+    ///   - data: SVGA 文件数据。
+    ///   - key: 用于读写内存缓存和磁盘缓存的稳定 key。
+    /// - Returns: 解析后的动画实体。
+    /// - Throws: 解压或解析失败时抛出错误。
+    func parse(data: Data, cacheKey key: String) async throws -> SVGA.VideoEntity {
         if let cached = await SVGACacheStore.shared.read(key: key) {
             return cached
         }
@@ -68,7 +91,7 @@ public actor SVGAParser {
            let entity = try? await loadFromDisk(cacheDir: cacheDir, cacheKey: key) {
             return entity
         }
-        let entity: SVGAVideoEntity
+        let entity: SVGA.VideoEntity
         if SVGADecompressor.isZIP(data) {
             try SVGADecompressor.unzip(data, to: cacheDir)
             entity = try await loadFromDisk(cacheDir: cacheDir, cacheKey: key)
@@ -80,12 +103,14 @@ public actor SVGAParser {
         return entity
     }
 
-    /// 从 Bundle 中按资源名加载 SVGA 文件。
+    /// 从 bundle 中按资源名加载并解析 SVGA 文件。
     ///
     /// - Parameters:
     ///   - named: 资源名（不含 `.svga` 扩展名）。
-    ///   - bundle: 资源所在 Bundle，nil 使用 `Bundle.main`。
-    public func parse(named: String, in bundle: Bundle? = nil) async throws -> SVGAVideoEntity {
+    ///   - bundle: 资源所在的 bundle。传入 `nil` 时使用 `Bundle.main`。
+    /// - Returns: 解析后的动画实体。
+    /// - Throws: 读取、解压或解析失败时抛出错误。
+    func parse(named: String, in bundle: Bundle? = nil) async throws -> SVGA.VideoEntity {
         let b = bundle ?? Bundle.main
         guard let fileURL = b.url(forResource: named, withExtension: "svga")
                ?? b.url(forResource: named, withExtension: nil) else {
@@ -96,9 +121,23 @@ public actor SVGAParser {
         return try await parse(data: data, cacheKey: key)
     }
 
+    /// 从本地文件 URL 读取并解析 SVGA 文件。
+    ///
+    /// - Parameter fileURL: 指向 SVGA 文件的本地文件 URL。
+    /// - Returns: 解析后的动画实体。
+    /// - Throws: 读取、解压或解析失败时抛出错误。
+    func parse(fileURL: URL) async throws -> SVGA.VideoEntity {
+        guard fileURL.isFileURL else {
+            throw SVGAParserError.invalidURL
+        }
+        let data = try Data(contentsOf: fileURL)
+        let key = sha256(data)
+        return try await parse(data: data, cacheKey: key)
+    }
+
     // MARK: - Private helpers
 
-    private func loadFromDisk(cacheDir: URL, cacheKey key: String) async throws -> SVGAVideoEntity {
+    private func loadFromDisk(cacheDir: URL, cacheKey key: String) async throws -> SVGA.VideoEntity {
         let binaryPath = cacheDir.appendingPathComponent("movie.binary").path
         let specPath = cacheDir.appendingPathComponent("movie.spec").path
         if FileManager.default.fileExists(atPath: binaryPath) {
@@ -111,19 +150,19 @@ public actor SVGAParser {
         throw SVGAParserError.missingMovieFile
     }
 
-    private func parseProto(data: Data, cacheDir: String, cacheKey key: String) throws -> SVGAVideoEntity {
-        let proto = try MovieEntity(serializedBytes: data)
-        return SVGAVideoEntity(protoObject: proto, cacheDir: cacheDir)
+    private func parseProto(data: Data, cacheDir: String, cacheKey key: String) throws -> SVGA.VideoEntity {
+        let proto = try SVGAProto.Movie(serializedBytes: data)
+        return SVGA.VideoEntity(protoObject: proto, cacheDir: cacheDir)
     }
 
-    private func parseJSON(data: Data, cacheDir: String, cacheKey key: String) throws -> SVGAVideoEntity {
+    private func parseJSON(data: Data, cacheDir: String, cacheKey key: String) throws -> SVGA.VideoEntity {
         guard case .object(let jsonObject) = try JSONDecoder().decode(SVGAJSONValue.self, from: data) else {
             throw SVGAParserError.invalidJSON
         }
-        return SVGAVideoEntity(jsonObject: jsonObject, cacheDir: cacheDir)
+        return SVGA.VideoEntity(jsonObject: jsonObject, cacheDir: cacheDir)
     }
 
-    private func cacheEntity(_ entity: SVGAVideoEntity, key: String) async {
+    private func cacheEntity(_ entity: SVGA.VideoEntity, key: String) async {
         if enabledMemoryCache {
             await SVGACacheStore.shared.save(key: key, entity: entity)
         } else {
@@ -161,15 +200,26 @@ public actor SVGAParser {
 
 // MARK: - Errors
 
-/// SVGA 解析错误。
-public enum SVGAParserError: Error {
+/// SVGA 解析过程中产生的错误。
+enum SVGAParserError: Error {
+    /// URL 缺失或不是有效的文件 URL。
     case invalidURL
+    /// 在指定 bundle 中找不到资源。
     case resourceNotFound(String)
+    /// SVGA 压缩包中缺少 `movie.binary` 或 `movie.spec`。
     case missingMovieFile
+    /// SVGA JSON 数据格式无效。
     case invalidJSON
+    /// 下载文件超过允许的大小限制。
     case fileTooLarge
 }
 
+/// 测试使用的 URLSession 注入点。
+enum SVGAURLSessionTestHooks {
+    nonisolated(unsafe) static var protocolClasses: [AnyClass]?
+}
+
+/// 下载 SVGA 文件并报告进度的 URLSession 代理。
 private final class SVGADataDownloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let maximumSize: Int
     private let progressHandler: SVGADownloadProgressHandler?
@@ -199,6 +249,9 @@ private final class SVGADataDownloader: NSObject, URLSessionDataDelegate, @unche
                 self.continuation = continuation
                 let configuration = URLSessionConfiguration.default
                 configuration.requestCachePolicy = request.cachePolicy
+                if let protocolClasses = SVGAURLSessionTestHooks.protocolClasses {
+                    configuration.protocolClasses = protocolClasses + (configuration.protocolClasses ?? [])
+                }
                 let queue = OperationQueue()
                 queue.maxConcurrentOperationCount = 1
                 queue.name = "com.svga.player.download"

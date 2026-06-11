@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import UIKit
-@testable import SVGAPlayer
+@testable import SVGAView
 
 @Test
 func jsonValueDecodesNestedObjectsWithTypedAccessors() throws {
@@ -84,7 +84,7 @@ func videoEntityDecodesLegacyJSONThroughEnumBackedObject() throws {
     """.data(using: .utf8)!
 
     let jsonObject = try JSONDecoder().decode(SVGAJSONObject.self, from: data)
-    let entity = SVGAVideoEntity(
+    let entity = SVGA.VideoEntity(
         jsonObject: jsonObject,
         cacheDir: FileManager.default.temporaryDirectory.path
     )

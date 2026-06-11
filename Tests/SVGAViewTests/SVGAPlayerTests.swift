@@ -1,10 +1,10 @@
 import Testing
 import Foundation
-@testable import SVGAPlayer
+@testable import SVGAView
 
 // MARK: - Helpers
 
-private func loadEntity(named name: String) async throws -> SVGAVideoEntity {
+private func loadEntity(named name: String) async throws -> SVGA.VideoEntity {
     guard let url = Bundle.module.url(forResource: name, withExtension: "svga") else {
         throw SVGAParserError.resourceNotFound("\(name).svga not found in test bundle")
     }
@@ -31,8 +31,9 @@ private final class ProgressRecorder: @unchecked Sendable {
     }
 }
 
-private final class ChunkedSVGAURLProtocol: URLProtocol {
+final class ChunkedSVGAURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var responseData = Data()
+    private var isStopped = false
 
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host == "svga-progress.test"
@@ -58,17 +59,22 @@ private final class ChunkedSVGAURLProtocol: URLProtocol {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         let splitIndex = data.count / 2
         client?.urlProtocol(self, didLoad: Data(data.prefix(splitIndex)))
-        client?.urlProtocol(self, didLoad: Data(data.suffix(data.count - splitIndex)))
-        client?.urlProtocolDidFinishLoading(self)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, !self.isStopped else { return }
+            self.client?.urlProtocol(self, didLoad: Data(data.suffix(data.count - splitIndex)))
+            self.client?.urlProtocolDidFinishLoading(self)
+        }
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        isStopped = true
+    }
 }
 
 // MARK: - Parser Tests
 
 @Test
-func svgaPlayerModuleLoads() {
+func svgaViewModuleLoads() {
     #expect(true)
 }
 
@@ -129,8 +135,10 @@ func parseURL_reportsDownloadProgress() async throws {
         throw SVGAParserError.resourceNotFound("banner.svga not found in test bundle")
     }
     ChunkedSVGAURLProtocol.responseData = try Data(contentsOf: url)
-    URLProtocol.registerClass(ChunkedSVGAURLProtocol.self)
-    defer { URLProtocol.unregisterClass(ChunkedSVGAURLProtocol.self) }
+    SVGAURLSessionTestHooks.protocolClasses = [
+        ChunkedSVGAURLProtocol.self,
+        NeverFinishingSVGAURLProtocol.self
+    ]
 
     let request = URLRequest(
         url: URL(string: "https://svga-progress.test/banner-\(UUID().uuidString).svga")!,

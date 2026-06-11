@@ -2,24 +2,42 @@ import Foundation
 import ZIPFoundation
 import zlib
 
+/// SVGA 解压过程中产生的错误。
 enum SVGADecompressorError: Error {
+    /// zlib inflate 失败。
     case zlibInflateFailed
+    /// 解压后的数据超过允许的大小限制。
     case decompressedSizeExceeded
 }
 
+/// 提供 SVGA 压缩数据检测和解压能力的工具类型。
 enum SVGADecompressor {
+    /// 允许解压出的最大数据大小。
     static let maxDecompressedSize = 100_000_000 // 100 MB
 
+    /// 返回数据是否看起来是 ZIP 文件。
+    ///
+    /// - Parameter data: 要检测的数据。
+    /// - Returns: 数据以 ZIP magic number 开头时返回 `true`。
     static func isZIP(_ data: Data) -> Bool {
         guard data.count >= 2 else { return false }
         return data[0] == 0x50 && data[1] == 0x4B // "PK"
     }
 
+    /// 返回数据是否看起来是 MP3 文件。
+    ///
+    /// - Parameter data: 要检测的数据。
+    /// - Returns: 数据以 ID3 magic number 开头时返回 `true`。
     static func isMP3(_ data: Data) -> Bool {
         guard data.count >= 3 else { return false }
         return data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33 // "ID3"
     }
 
+    /// 使用 zlib 解压原始 SVGA 数据。
+    ///
+    /// - Parameter data: zlib 压缩数据。
+    /// - Returns: 解压后的数据。
+    /// - Throws: 解压失败或输出超过大小限制时抛出错误。
     static func inflate(_ data: Data) throws -> Data {
         guard !data.isEmpty else { return data }
         let fullLength = data.count
@@ -67,6 +85,12 @@ enum SVGADecompressor {
         return decompressed
     }
 
+    /// 将 ZIP 格式的 SVGA 数据解压到指定目录。
+    ///
+    /// - Parameters:
+    ///   - data: ZIP 文件数据。
+    ///   - url: 输出目录 URL。
+    /// - Throws: 写入、解压失败或输出超过大小限制时抛出错误。
     static func unzip(_ data: Data, to url: URL) throws {
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".svga")
