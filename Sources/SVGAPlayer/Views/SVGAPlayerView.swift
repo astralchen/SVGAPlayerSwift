@@ -144,6 +144,9 @@ public class SVGAPlayerView: UIView {
     /// 每一帧切换时回调，参数为播放进度百分比 (0.0 ~ 1.0)。
     public var onPercentageChanged: ((CGFloat) -> Void)?
 
+    /// 网络下载进度回调，参数为下载进度百分比 (0.0 ~ 1.0)。
+    public var onDownloadProgress: ((Double) -> Void)?
+
     /// 加载失败时回调，参数为错误信息。
     public var onLoadFailed: ((Error) -> Void)?
 
@@ -240,7 +243,14 @@ public class SVGAPlayerView: UIView {
     ///   - url: SVGA 文件的 HTTP(S) URL。
     ///   - dynamicContent: 可选的动态内容配置。
     public func play(url: URL, dynamicContent: SVGADynamicContent? = nil) {
-        load(dynamicContent: dynamicContent) { try await SVGAParser.shared.parse(url: url) }
+        let progressHandler: SVGADownloadProgressHandler = { [weak self] progress in
+            Task { @MainActor in
+                self?.onDownloadProgress?(progress)
+            }
+        }
+        load(dynamicContent: dynamicContent) {
+            try await SVGAParser.shared.parse(url: url, progressHandler: progressHandler)
+        }
     }
 
     private func load(dynamicContent: SVGADynamicContent?, _ fetch: @escaping () async throws -> SVGAVideoEntity) {

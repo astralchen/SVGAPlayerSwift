@@ -98,7 +98,11 @@ playerView.onFrameChanged = { frame in
 }
 
 playerView.onPercentageChanged = { percentage in
-    print("progress: \(percentage)")
+    print("playback progress: \(percentage)")
+}
+
+playerView.onDownloadProgress = { progress in
+    print("download progress: \(progress)")
 }
 
 playerView.onLoadFailed = { error in

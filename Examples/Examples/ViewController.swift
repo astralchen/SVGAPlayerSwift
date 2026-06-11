@@ -25,6 +25,9 @@ class ViewController: UIViewController {
     private let stageView = UIView()
     private let playerView = SVGAPlayerView()
     private let stateLabel = UILabel()
+    private let downloadProgressStack = UIStackView()
+    private let downloadProgressView = UIProgressView(progressViewStyle: .default)
+    private let downloadProgressLabel = UILabel()
     private let sourceBadgeLabel = PaddedLabel()
     private let replayButton = UIButton(type: .system)
     private let pauseButton = UIButton(type: .system)
@@ -167,6 +170,22 @@ private extension ViewController {
         stateLabel.numberOfLines = 0
         stateLabel.isHidden = true
 
+        downloadProgressStack.translatesAutoresizingMaskIntoConstraints = false
+        downloadProgressStack.axis = .vertical
+        downloadProgressStack.spacing = 8
+        downloadProgressStack.isHidden = true
+
+        downloadProgressView.progressTintColor = .systemPink
+        downloadProgressView.trackTintColor = UIColor.white.withAlphaComponent(0.18)
+
+        downloadProgressLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        downloadProgressLabel.textColor = UIColor.white.withAlphaComponent(0.86)
+        downloadProgressLabel.textAlignment = .center
+        downloadProgressLabel.text = DownloadProgressFormatter.percentText(for: 0)
+
+        downloadProgressStack.addArrangedSubview(downloadProgressView)
+        downloadProgressStack.addArrangedSubview(downloadProgressLabel)
+
         sourceBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
         sourceBadgeLabel.font = .systemFont(ofSize: 11, weight: .bold)
         sourceBadgeLabel.textColor = .white
@@ -177,6 +196,7 @@ private extension ViewController {
 
         stageView.addSubview(playerView)
         stageView.addSubview(stateLabel)
+        stageView.addSubview(downloadProgressStack)
         stageView.addSubview(sourceBadgeLabel)
 
         NSLayoutConstraint.activate([
@@ -189,6 +209,11 @@ private extension ViewController {
             stateLabel.centerYAnchor.constraint(equalTo: stageView.centerYAnchor),
             stateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: stageView.leadingAnchor, constant: 24),
             stateLabel.trailingAnchor.constraint(lessThanOrEqualTo: stageView.trailingAnchor, constant: -24),
+
+            stateLabel.bottomAnchor.constraint(lessThanOrEqualTo: downloadProgressStack.topAnchor, constant: -16),
+            downloadProgressStack.leadingAnchor.constraint(equalTo: stageView.leadingAnchor, constant: 42),
+            downloadProgressStack.trailingAnchor.constraint(equalTo: stageView.trailingAnchor, constant: -42),
+            downloadProgressStack.bottomAnchor.constraint(equalTo: stageView.bottomAnchor, constant: -22),
 
             sourceBadgeLabel.topAnchor.constraint(equalTo: stageView.topAnchor, constant: 12),
             sourceBadgeLabel.trailingAnchor.constraint(equalTo: stageView.trailingAnchor, constant: -12)
@@ -249,6 +274,10 @@ private extension ViewController {
             self.hideState()
         }
 
+        playerView.onDownloadProgress = { [weak self] progress in
+            self?.showDownloadProgress(progress)
+        }
+
         playerView.onLoadFailed = { [weak self] _ in
             self?.showState("加载失败\n点击重播重试", state: .error)
         }
@@ -304,7 +333,8 @@ private extension ViewController {
         updateLoopButton()
         collectionView.reloadData()
 
-        showState("加载中...", state: .loading)
+        showState("准备下载...", state: .loading)
+        showDownloadProgress(0)
         playerView.clear()
         playerView.play(url: effect.url)
     }
@@ -352,18 +382,36 @@ private extension ViewController {
         switch state {
         case .hidden:
             stateLabel.isHidden = true
+            hideDownloadProgress()
         case .loading:
             stateLabel.textColor = UIColor.white.withAlphaComponent(0.88)
         case .empty:
             stateLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+            hideDownloadProgress()
         case .error:
             stateLabel.textColor = .systemRed
+            hideDownloadProgress()
         }
     }
 
     func hideState() {
         stageState = .hidden
         stateLabel.isHidden = true
+        hideDownloadProgress()
+    }
+
+    func showDownloadProgress(_ progress: Double) {
+        guard stageState == .loading else { return }
+        let boundedProgress = min(1, max(0, progress))
+        stateLabel.text = boundedProgress >= 1 ? "下载完成，准备播放..." : "下载中..."
+        downloadProgressView.setProgress(Float(boundedProgress), animated: boundedProgress > 0)
+        downloadProgressLabel.text = DownloadProgressFormatter.percentText(for: boundedProgress)
+        downloadProgressStack.isHidden = false
+    }
+
+    func hideDownloadProgress() {
+        downloadProgressStack.isHidden = true
+        downloadProgressView.setProgress(0, animated: false)
     }
 
     func setControlsEnabled(_ enabled: Bool) {

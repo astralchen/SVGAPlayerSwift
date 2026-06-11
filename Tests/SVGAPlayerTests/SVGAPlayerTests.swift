@@ -14,6 +14,57 @@ private func loadEntity(named name: String) async throws -> SVGAVideoEntity {
     return try await SVGAParser.shared.parse(data: data, cacheKey: "test_\(name)_\(data.count)")
 }
 
+private final class ProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedValues: [Double] = []
+
+    func record(_ value: Double) {
+        lock.lock()
+        recordedValues.append(value)
+        lock.unlock()
+    }
+
+    var values: [Double] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedValues
+    }
+}
+
+private final class ChunkedSVGAURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var responseData = Data()
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "svga-progress.test"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: SVGAParserError.invalidURL)
+            return
+        }
+        let data = Self.responseData
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Length": "\(data.count)"]
+        )!
+
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let splitIndex = data.count / 2
+        client?.urlProtocol(self, didLoad: Data(data.prefix(splitIndex)))
+        client?.urlProtocol(self, didLoad: Data(data.suffix(data.count - splitIndex)))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
 // MARK: - Parser Tests
 
 @Test
@@ -70,4 +121,30 @@ func parseBubbleSVGA_spriteImageKeysNonEmpty() async throws {
         #expect(!sprite.imageKey.isEmpty, "sprite[\(i)] imageKey should not be empty")
     }
     print("[SVGATest] bubble: all \(entity.sprites.count) sprite imageKeys are non-empty")
+}
+
+@Test
+func parseURL_reportsDownloadProgress() async throws {
+    guard let url = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
+        throw SVGAParserError.resourceNotFound("banner.svga not found in test bundle")
+    }
+    ChunkedSVGAURLProtocol.responseData = try Data(contentsOf: url)
+    URLProtocol.registerClass(ChunkedSVGAURLProtocol.self)
+    defer { URLProtocol.unregisterClass(ChunkedSVGAURLProtocol.self) }
+
+    let request = URLRequest(
+        url: URL(string: "https://svga-progress.test/banner-\(UUID().uuidString).svga")!,
+        cachePolicy: .reloadIgnoringLocalCacheData,
+        timeoutInterval: 5
+    )
+    let recorder = ProgressRecorder()
+
+    let entity = try await SVGAParser.shared.parse(request: request) { progress in
+        recorder.record(progress)
+    }
+
+    let values = recorder.values
+    #expect(entity.frames > 0)
+    #expect(values.contains { $0 > 0 && $0 < 1 }, "expected an intermediate progress value, got \(values)")
+    #expect(values.last == 1.0, "expected final progress to be 1.0, got \(values)")
 }

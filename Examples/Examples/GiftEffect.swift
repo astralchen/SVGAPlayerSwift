@@ -56,3 +56,11 @@ enum GiftEffectsDataSourceError: LocalizedError {
         }
     }
 }
+
+enum DownloadProgressFormatter {
+    static func percentText(for progress: Double) -> String {
+        let boundedProgress = min(1, max(0, progress))
+        let percentage = Int((boundedProgress * 100).rounded())
+        return "\(percentage)%"
+    }
+}

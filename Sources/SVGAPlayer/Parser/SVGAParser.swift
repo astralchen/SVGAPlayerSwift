@@ -2,6 +2,9 @@ import UIKit
 import SwiftProtobuf
 import CryptoKit
 
+/// 网络下载进度回调，取值范围为 0.0 ~ 1.0。
+public typealias SVGADownloadProgressHandler = @Sendable (_ progress: Double) -> Void
+
 /// SVGA 文件解析器，支持 Proto 2.x 和 JSON 1.x 两种格式。
 ///
 /// 使用共享实例 `SVGAParser.shared` 进行解析，内置内存缓存和磁盘缓存。
@@ -28,13 +31,13 @@ public actor SVGAParser {
     // MARK: - Public API
 
     /// 从 URL 下载并解析 SVGA 文件。
-    public func parse(url: URL) async throws -> SVGAVideoEntity {
+    public func parse(url: URL, progressHandler: SVGADownloadProgressHandler? = nil) async throws -> SVGAVideoEntity {
         let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 20)
-        return try await parse(request: request)
+        return try await parse(request: request, progressHandler: progressHandler)
     }
 
     /// 从自定义 URLRequest 下载并解析 SVGA 文件。
-    public func parse(request: URLRequest) async throws -> SVGAVideoEntity {
+    public func parse(request: URLRequest, progressHandler: SVGADownloadProgressHandler? = nil) async throws -> SVGAVideoEntity {
         guard let url = request.url else {
             throw SVGAParserError.invalidURL
         }
@@ -42,14 +45,16 @@ public actor SVGAParser {
         let cacheDir = cacheDirURL(for: key)
         if FileManager.default.fileExists(atPath: cacheDir.path) {
             if let entity = try? await loadFromDisk(cacheDir: cacheDir, cacheKey: key) {
+                progressHandler?(1.0)
                 return entity
             }
             try? FileManager.default.removeItem(at: cacheDir)
         }
-        let (data, _) = try await URLSession.shared.data(for: request)
-        guard data.count <= maxDownloadSize else {
-            throw SVGAParserError.fileTooLarge
-        }
+        let data = try await SVGADataDownloader.download(
+            request: request,
+            maximumSize: maxDownloadSize,
+            progressHandler: progressHandler
+        )
         return try await parse(data: data, cacheKey: key)
     }
 
@@ -163,4 +168,114 @@ public enum SVGAParserError: Error {
     case missingMovieFile
     case invalidJSON
     case fileTooLarge
+}
+
+private final class SVGADataDownloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let maximumSize: Int
+    private let progressHandler: SVGADownloadProgressHandler?
+    private var data = Data()
+    private var expectedContentLength: Int64 = NSURLSessionTransferSizeUnknown
+    private var continuation: CheckedContinuation<Data, Error>?
+    private var session: URLSession?
+    private var isCompleted = false
+
+    private init(maximumSize: Int, progressHandler: SVGADownloadProgressHandler?) {
+        self.maximumSize = maximumSize
+        self.progressHandler = progressHandler
+    }
+
+    static func download(
+        request: URLRequest,
+        maximumSize: Int,
+        progressHandler: SVGADownloadProgressHandler?
+    ) async throws -> Data {
+        let downloader = SVGADataDownloader(maximumSize: maximumSize, progressHandler: progressHandler)
+        return try await downloader.download(request: request)
+    }
+
+    private func download(request: URLRequest) async throws -> Data {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+                let configuration = URLSessionConfiguration.default
+                configuration.requestCachePolicy = request.cachePolicy
+                let queue = OperationQueue()
+                queue.maxConcurrentOperationCount = 1
+                queue.name = "com.svga.player.download"
+                let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+                self.session = session
+                session.dataTask(with: request).resume()
+            }
+        } onCancel: {
+            self.cancel()
+        }
+    }
+
+    private func cancel() {
+        session?.invalidateAndCancel()
+        complete(.failure(CancellationError()))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        expectedContentLength = response.expectedContentLength
+        if expectedContentLength > Int64(maximumSize) {
+            complete(.failure(SVGAParserError.fileTooLarge))
+            completionHandler(.cancel)
+            return
+        }
+        reportProgress(receivedBytes: 0)
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive receivedData: Data) {
+        data.append(receivedData)
+        guard data.count <= maximumSize else {
+            complete(.failure(SVGAParserError.fileTooLarge))
+            dataTask.cancel()
+            return
+        }
+        reportProgress(receivedBytes: data.count)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            complete(.failure(error))
+            return
+        }
+        reportProgress(receivedBytes: data.count, forceComplete: true)
+        complete(.success(data))
+    }
+
+    private func reportProgress(receivedBytes: Int, forceComplete: Bool = false) {
+        guard let progressHandler else { return }
+        if forceComplete {
+            progressHandler(1.0)
+            return
+        }
+        guard expectedContentLength > 0 else {
+            progressHandler(receivedBytes > 0 ? 0.0 : 0.0)
+            return
+        }
+        let progress = min(1.0, max(0.0, Double(receivedBytes) / Double(expectedContentLength)))
+        progressHandler(progress)
+    }
+
+    private func complete(_ result: Result<Data, Error>) {
+        guard !isCompleted else { return }
+        isCompleted = true
+        session?.finishTasksAndInvalidate()
+        session = nil
+        switch result {
+        case .success(let data):
+            continuation?.resume(returning: data)
+        case .failure(let error):
+            continuation?.resume(throwing: error)
+        }
+        continuation = nil
+    }
 }

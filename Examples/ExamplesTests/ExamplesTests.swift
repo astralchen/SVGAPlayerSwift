@@ -43,4 +43,10 @@ struct ExamplesTests {
         #expect(GiftEffectsDataSource.filter(effects, query: "ymres").map(\.name) == ["欢乐节拍"])
         #expect(GiftEffectsDataSource.filter(effects, query: "  ").count == 2)
     }
+
+    @Test func formatsDownloadProgressAsPercentText() {
+        #expect(DownloadProgressFormatter.percentText(for: -0.2) == "0%")
+        #expect(DownloadProgressFormatter.percentText(for: 0.427) == "43%")
+        #expect(DownloadProgressFormatter.percentText(for: 1.4) == "100%")
+    }
 }
