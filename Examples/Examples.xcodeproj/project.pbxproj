@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		772C39CC2F714A6300A6B0D0 /* SVGAPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = 772C39CB2F714A6300A6B0D0 /* SVGAPlayer */; };
+		772C39CC2F714A6300A6B0D0 /* SVGAView in Frameworks */ = {isa = PBXBuildFile; productRef = 772C39CB2F714A6300A6B0D0 /* SVGAView */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,7 +69,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				772C39CC2F714A6300A6B0D0 /* SVGAPlayer in Frameworks */,
+				772C39CC2F714A6300A6B0D0 /* SVGAView in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -130,7 +130,7 @@
 			);
 			name = Examples;
 			packageProductDependencies = (
-				772C39CB2F714A6300A6B0D0 /* SVGAPlayer */,
+				772C39CB2F714A6300A6B0D0 /* SVGAView */,
 			);
 			productName = Examples;
 			productReference = 772C39962F714A1800A6B0D0 /* Examples.app */;
@@ -607,9 +607,9 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		772C39CB2F714A6300A6B0D0 /* SVGAPlayer */ = {
+		772C39CB2F714A6300A6B0D0 /* SVGAView */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = SVGAPlayer;
+			productName = SVGAView;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

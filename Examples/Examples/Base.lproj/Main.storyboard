@@ -16,25 +16,9 @@
                     <view key="view" contentMode="scaleToFill" id="8bC-Xf-vdC">
                         <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                        <subviews>
-                            <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="XL5-dP-aeF" customClass="SVGAPlayerView" customModule="SVGAPlayer">
-                                <rect key="frame" x="76.666666666666686" y="362" width="240" height="128"/>
-                                <constraints>
-                                    <constraint firstAttribute="width" constant="240" id="DTH-t5-oo8"/>
-                                    <constraint firstAttribute="width" secondItem="XL5-dP-aeF" secondAttribute="height" multiplier="15:8" id="kZZ-hB-MNy"/>
-                                </constraints>
-                            </view>
-                        </subviews>
                         <viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
-                        <constraints>
-                            <constraint firstItem="XL5-dP-aeF" firstAttribute="centerY" secondItem="8bC-Xf-vdC" secondAttribute="centerY" id="8EQ-NW-iRt"/>
-                            <constraint firstItem="XL5-dP-aeF" firstAttribute="centerX" secondItem="8bC-Xf-vdC" secondAttribute="centerX" id="B3P-AG-ol6"/>
-                        </constraints>
                     </view>
-                    <connections>
-                        <outlet property="imageView" destination="XL5-dP-aeF" id="oia-HP-tWR"/>
-                    </connections>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="dkx-z0-nzr" sceneMemberID="firstResponder"/>
             </objects>

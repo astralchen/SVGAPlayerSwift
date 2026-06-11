@@ -1,6 +1,9 @@
 import UIKit
 
-/// 将 SVGA 动画逐帧导出为 UIImage 数组或 PNG 文件序列。
+/// 将 SVGA 动画逐帧导出为图片。
+///
+/// `SVGAExporter` 使用与播放器相同的 layer 渲染路径，将每一帧输出为
+/// `UIImage` 或 PNG 文件。
 ///
 /// ```swift
 /// let entity = try await SVGAParser.shared.parse(named: "animation")
@@ -14,17 +17,17 @@ import UIKit
 /// exporter.saveImages(to: "/path/to/output", filePrefix: "frame_")
 /// ```
 @MainActor
-public final class SVGAExporter {
+final class SVGAExporter {
 
     /// 要导出的动画数据。
-    public var videoItem: SVGAVideoEntity?
+    var videoItem: SVGA.VideoEntity?
 
-    public init() {}
+    init() {}
 
-    /// 将所有帧导出为 UIImage 数组。
+    /// 将动画的所有帧导出为图片数组。
     ///
-    /// - Returns: 按帧顺序排列的图片数组，videoItem 为 nil 或尺寸无效时返回空数组。
-    public func toImages() -> [UIImage] {
+    /// - Returns: 按帧顺序排列的图片数组。`videoItem` 为 `nil` 或尺寸无效时返回空数组。
+    func toImages() -> [UIImage] {
         guard let item = videoItem,
               item.videoSize.width > 0, item.videoSize.height > 0 else { return [] }
         guard let (dl, layers) = buildDrawLayer(item: item) else { return [] }
@@ -37,12 +40,14 @@ public final class SVGAExporter {
         return images
     }
 
-    /// 将所有帧导出为 PNG 文件，文件名格式为 `{filePrefix}{frameIndex}.png`。
+    /// 将动画的所有帧导出为 PNG 文件。
+    ///
+    /// 文件名格式为 `{filePrefix}{frameIndex}.png`。
     ///
     /// - Parameters:
     ///   - path: 输出目录路径，不存在时自动创建。
-    ///   - filePrefix: 文件名前缀，默认为空。
-    public func saveImages(to path: String, filePrefix: String = "") {
+    ///   - filePrefix: 文件名前缀。
+    func saveImages(to path: String, filePrefix: String = "") {
         guard let item = videoItem,
               item.videoSize.width > 0, item.videoSize.height > 0 else { return }
         try? FileManager.default.createDirectory(atPath: path,
@@ -61,7 +66,7 @@ public final class SVGAExporter {
 
     // MARK: - Private
 
-    private func buildDrawLayer(item: SVGAVideoEntity) -> (CALayer, [SVGAContentLayer])? {
+    private func buildDrawLayer(item: SVGA.VideoEntity) -> (CALayer, [SVGAContentLayer])? {
         let dl = CALayer()
         dl.frame = CGRect(origin: .zero, size: item.videoSize)
         dl.masksToBounds = true
