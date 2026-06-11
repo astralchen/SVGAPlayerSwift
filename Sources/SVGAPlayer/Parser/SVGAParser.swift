@@ -112,12 +112,12 @@ public actor SVGAParser {
     }
 
     private func parseProto(data: Data, cacheDir: String, cacheKey key: String) throws -> SVGAVideoEntity {
-        let proto = try Svga_MovieEntity(serializedBytes: data)
+        let proto = try MovieEntity(serializedBytes: data)
         return SVGAVideoEntity(protoObject: proto, cacheDir: cacheDir)
     }
 
     private func parseJSON(data: Data, cacheDir: String, cacheKey key: String) throws -> SVGAVideoEntity {
-        guard let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard case .object(let jsonObject) = try JSONDecoder().decode(SVGAJSONValue.self, from: data) else {
             throw SVGAParserError.invalidJSON
         }
         return SVGAVideoEntity(jsonObject: jsonObject, cacheDir: cacheDir)

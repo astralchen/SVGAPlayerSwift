@@ -6,7 +6,7 @@ public struct SVGAAudioEntity: Sendable {
     public let endFrame: Int
     public let startTime: Int
 
-    init(protoObject: Svga_AudioEntity) {
+    init(protoObject: AudioEntity) {
         audioKey = protoObject.audioKey
         startFrame = Int(protoObject.startFrame)
         endFrame = Int(protoObject.endFrame)

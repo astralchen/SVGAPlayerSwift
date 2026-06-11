@@ -23,7 +23,7 @@ public final class SVGAVideoSpriteFrameEntity: @unchecked Sendable {
 
     // MARK: Proto init
 
-    init(protoObject: Svga_FrameEntity) {
+    init(protoObject: FrameEntity) {
         alpha = CGFloat(protoObject.alpha)
         let l = protoObject.layout
         layout = CGRect(x: CGFloat(l.x), y: CGFloat(l.y),
@@ -45,32 +45,32 @@ public final class SVGAVideoSpriteFrameEntity: @unchecked Sendable {
 
     // MARK: JSON init (1.x)
 
-    init(jsonObject: [String: Any]) {
-        alpha = (jsonObject["alpha"] as? NSNumber).map { CGFloat($0.floatValue) } ?? 0
+    init(jsonObject: SVGAJSONObject) {
+        alpha = jsonObject.cgFloat("alpha")
 
-        if let l = jsonObject["layout"] as? [String: Any],
-           let x = l["x"] as? NSNumber, let y = l["y"] as? NSNumber,
-           let w = l["width"] as? NSNumber, let h = l["height"] as? NSNumber {
-            layout = CGRect(x: CGFloat(x.floatValue), y: CGFloat(y.floatValue),
-                            width: CGFloat(w.floatValue), height: CGFloat(h.floatValue))
+        if let l = jsonObject.object("layout"),
+           let x = l.number("x"), let y = l.number("y"),
+           let w = l.number("width"), let h = l.number("height") {
+            layout = CGRect(x: CGFloat(x), y: CGFloat(y),
+                            width: CGFloat(w), height: CGFloat(h))
         } else {
             layout = .zero
         }
 
-        if let t = jsonObject["transform"] as? [String: Any],
-           let a = t["a"] as? NSNumber, let b = t["b"] as? NSNumber,
-           let c = t["c"] as? NSNumber, let d = t["d"] as? NSNumber,
-           let tx = t["tx"] as? NSNumber, let ty = t["ty"] as? NSNumber {
-            transform = CGAffineTransform(a: CGFloat(a.floatValue), b: CGFloat(b.floatValue),
-                                          c: CGFloat(c.floatValue), d: CGFloat(d.floatValue),
-                                          tx: CGFloat(tx.floatValue), ty: CGFloat(ty.floatValue))
+        if let t = jsonObject.object("transform"),
+           let a = t.number("a"), let b = t.number("b"),
+           let c = t.number("c"), let d = t.number("d"),
+           let tx = t.number("tx"), let ty = t.number("ty") {
+            transform = CGAffineTransform(a: CGFloat(a), b: CGFloat(b),
+                                          c: CGFloat(c), d: CGFloat(d),
+                                          tx: CGFloat(tx), ty: CGFloat(ty))
         } else {
             transform = .identity
         }
 
-        let cp = jsonObject["clipPath"] as? String
+        let cp = jsonObject.string("clipPath")
         clipPath = (cp?.isEmpty == false) ? cp : nil
-        shapes = (jsonObject["shapes"] as? [[String: Any]])?.compactMap { SVGAShapeEntity(jsonObject: $0) } ?? []
+        shapes = jsonObject.objects("shapes").compactMap { SVGAShapeEntity(jsonObject: $0) }
         (nx, ny) = Self.computeNXNY(transform: transform, layout: layout)
     }
 

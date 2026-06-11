@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package com.opensource.svga;
 
-option swift_prefix = "Svga_";
+option swift_prefix = "";
 
 // Movie-level parameters
 message MovieParams {

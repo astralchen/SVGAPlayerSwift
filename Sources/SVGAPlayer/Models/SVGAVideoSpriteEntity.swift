@@ -7,7 +7,7 @@ public final class SVGAVideoSpriteEntity: @unchecked Sendable {
 
     // MARK: Proto init
 
-    init(protoObject: Svga_SpriteEntity) {
+    init(protoObject: SpriteEntity) {
         imageKey = protoObject.imageKey
         matteKey = protoObject.matteKey.isEmpty ? nil : protoObject.matteKey
         frames = protoObject.frames.map { SVGAVideoSpriteFrameEntity(protoObject: $0) }
@@ -15,11 +15,11 @@ public final class SVGAVideoSpriteEntity: @unchecked Sendable {
 
     // MARK: JSON init (1.x)
 
-    init?(jsonObject: [String: Any]) {
-        guard let key = jsonObject["imageKey"] as? String,
-              let jsonFrames = jsonObject["frames"] as? [[String: Any]] else { return nil }
+    init?(jsonObject: SVGAJSONObject) {
+        guard let key = jsonObject.string("imageKey"),
+              let jsonFrames = jsonObject.objectArray("frames") else { return nil }
         imageKey = key
-        matteKey = jsonObject["matteKey"] as? String
+        matteKey = jsonObject.string("matteKey")
         frames = jsonFrames.map { SVGAVideoSpriteFrameEntity(jsonObject: $0) }
     }
 

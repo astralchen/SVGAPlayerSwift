@@ -11,7 +11,7 @@ public final class SVGAVideoEntity: @unchecked Sendable {
 
     // MARK: Proto init (2.x)
 
-    init(protoObject: Svga_MovieEntity, cacheDir: String) {
+    init(protoObject: MovieEntity, cacheDir: String) {
         if protoObject.hasParams {
             videoSize = CGSize(width: CGFloat(protoObject.params.viewBoxWidth),
                                height: CGFloat(protoObject.params.viewBoxHeight))
@@ -29,23 +29,23 @@ public final class SVGAVideoEntity: @unchecked Sendable {
 
     // MARK: JSON init (1.x)
 
-    init(jsonObject: [String: Any], cacheDir: String) {
-        if let movie = jsonObject["movie"] as? [String: Any] {
-            if let viewBox = movie["viewBox"] as? [String: Any],
-               let w = viewBox["width"] as? NSNumber,
-               let h = viewBox["height"] as? NSNumber {
-                videoSize = CGSize(width: CGFloat(w.floatValue), height: CGFloat(h.floatValue))
+    init(jsonObject: SVGAJSONObject, cacheDir: String) {
+        if let movie = jsonObject.object("movie") {
+            if let viewBox = movie.object("viewBox"),
+               let w = viewBox.number("width"),
+               let h = viewBox.number("height") {
+                videoSize = CGSize(width: CGFloat(w), height: CGFloat(h))
             } else {
                 videoSize = CGSize(width: 100, height: 100)
             }
-            fps = max(1, min((movie["fps"] as? NSNumber).map { Int($0.intValue) } ?? 20, 120))
-            frames = max(0, min((movie["frames"] as? NSNumber).map { Int($0.intValue) } ?? 0, 100_000))
+            fps = max(1, min(movie.number("fps").map { Int($0) } ?? 20, 120))
+            frames = max(0, min(movie.number("frames").map { Int($0) } ?? 0, 100_000))
         } else {
             videoSize = CGSize(width: 100, height: 100)
             fps = 20
             frames = 0
         }
-        if let jsonImages = jsonObject["images"] as? [String: String] {
+        if let jsonImages = jsonObject.stringMap("images") {
             var imgs: [String: UIImage] = [:]
             for (key, fileName) in jsonImages {
                 guard Self.isSafeFileName(fileName) else { continue }
@@ -61,11 +61,7 @@ public final class SVGAVideoEntity: @unchecked Sendable {
             images = [:]
         }
         audiosData = [:]
-        if let jsonSprites = jsonObject["sprites"] as? [[String: Any]] {
-            sprites = jsonSprites.compactMap { SVGAVideoSpriteEntity(jsonObject: $0) }
-        } else {
-            sprites = []
-        }
+        sprites = jsonObject.objects("sprites").compactMap { SVGAVideoSpriteEntity(jsonObject: $0) }
         audios = []
     }
 

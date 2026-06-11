@@ -2,7 +2,7 @@ import UIKit
 
 /// SVGA 矢量形状的统一模型，在解析阶段从 Proto 或 JSON 转换而来。
 ///
-/// 消除了 SVGAVectorLayer 中的运行时类型检查（`as? [String: Any]` / `as? Svga_ShapeEntity`），
+/// 消除了 SVGAVectorLayer 中对 JSON 字典 / Proto 对象的运行时类型分支，
 /// 所有属性在编译期类型安全。
 struct SVGAShapeEntity {
 
@@ -44,7 +44,7 @@ struct SVGAShapeEntity {
 
     // MARK: - Proto init (2.x)
 
-    init(protoObject shape: Svga_ShapeEntity) {
+    init(protoObject shape: ShapeEntity) {
         switch shape.type {
         case .shape:   type = .shape
         case .rect:    type = .rect
@@ -112,8 +112,8 @@ struct SVGAShapeEntity {
 
     // MARK: - JSON init (1.x)
 
-    init?(jsonObject dict: [String: Any]) {
-        guard let typeStr = dict["type"] as? String else { return nil }
+    init?(jsonObject dict: SVGAJSONObject) {
+        guard let typeStr = dict.string("type") else { return nil }
         switch typeStr {
         case "shape":   type = .shape
         case "rect":    type = .rect
@@ -122,19 +122,19 @@ struct SVGAShapeEntity {
         default:        return nil
         }
 
-        if let a = dict["args"] as? [String: Any] {
+        if let a = dict.object("args") {
             switch type {
             case .shape:
-                args = .shape(d: (a["d"] as? String) ?? "")
+                args = .shape(d: a.string("d") ?? "")
             case .rect:
                 args = .rect(
-                    x: Self.cgf(a["x"]), y: Self.cgf(a["y"]),
-                    width: Self.cgf(a["width"]), height: Self.cgf(a["height"]),
-                    cornerRadius: Self.cgf(a["cornerRadius"]))
+                    x: a.cgFloat("x"), y: a.cgFloat("y"),
+                    width: a.cgFloat("width"), height: a.cgFloat("height"),
+                    cornerRadius: a.cgFloat("cornerRadius"))
             case .ellipse:
                 args = .ellipse(
-                    cx: Self.cgf(a["x"]), cy: Self.cgf(a["y"]),
-                    rx: Self.cgf(a["radiusX"]), ry: Self.cgf(a["radiusY"]))
+                    cx: a.cgFloat("x"), cy: a.cgFloat("y"),
+                    rx: a.cgFloat("radiusX"), ry: a.cgFloat("radiusY"))
             case .keep:
                 args = nil
             }
@@ -142,45 +142,39 @@ struct SVGAShapeEntity {
             args = nil
         }
 
-        if let s = dict["styles"] as? [String: Any] {
+        if let s = dict.object("styles") {
             var st = Styles()
-            if let fill = s["fill"] as? [NSNumber], fill.count == 4 {
-                st.fill = UIColor(red: CGFloat(fill[0].floatValue), green: CGFloat(fill[1].floatValue),
-                                  blue: CGFloat(fill[2].floatValue), alpha: CGFloat(fill[3].floatValue))
+            if let fill = s.numbers("fill"), fill.count == 4 {
+                st.fill = UIColor(red: CGFloat(fill[0]), green: CGFloat(fill[1]),
+                                  blue: CGFloat(fill[2]), alpha: CGFloat(fill[3]))
             }
-            if let stroke = s["stroke"] as? [NSNumber], stroke.count == 4 {
-                st.stroke = UIColor(red: CGFloat(stroke[0].floatValue), green: CGFloat(stroke[1].floatValue),
-                                    blue: CGFloat(stroke[2].floatValue), alpha: CGFloat(stroke[3].floatValue))
+            if let stroke = s.numbers("stroke"), stroke.count == 4 {
+                st.stroke = UIColor(red: CGFloat(stroke[0]), green: CGFloat(stroke[1]),
+                                    blue: CGFloat(stroke[2]), alpha: CGFloat(stroke[3]))
             }
-            st.strokeWidth = Self.cgf(s["strokeWidth"])
-            if let lc = s["lineCap"] as? String { st.lineCap = CAShapeLayerLineCap(rawValue: lc) }
-            if let lj = s["lineJoin"] as? String { st.lineJoin = CAShapeLayerLineJoin(rawValue: lj) }
-            st.miterLimit = Self.cgf(s["miterLimit"])
-            if let ld = s["lineDash"] as? [NSNumber], ld.count == 3 {
-                let d0 = max(CGFloat(ld[0].floatValue), 1.0)
-                let d1 = max(CGFloat(ld[1].floatValue), 0.1)
-                st.lineDash = (d0, d1, CGFloat(ld[2].floatValue))
+            st.strokeWidth = s.cgFloat("strokeWidth")
+            if let lc = s.string("lineCap") { st.lineCap = CAShapeLayerLineCap(rawValue: lc) }
+            if let lj = s.string("lineJoin") { st.lineJoin = CAShapeLayerLineJoin(rawValue: lj) }
+            st.miterLimit = s.cgFloat("miterLimit")
+            if let ld = s.numbers("lineDash"), ld.count == 3 {
+                let d0 = max(CGFloat(ld[0]), 1.0)
+                let d1 = max(CGFloat(ld[1]), 0.1)
+                st.lineDash = (d0, d1, CGFloat(ld[2]))
             }
             styles = st
         } else {
             styles = nil
         }
 
-        if let t = dict["transform"] as? [String: Any],
-           let a = t["a"] as? NSNumber, let b = t["b"] as? NSNumber,
-           let c = t["c"] as? NSNumber, let d = t["d"] as? NSNumber,
-           let tx = t["tx"] as? NSNumber, let ty = t["ty"] as? NSNumber {
-            transform = CGAffineTransform(a: CGFloat(a.floatValue), b: CGFloat(b.floatValue),
-                                          c: CGFloat(c.floatValue), d: CGFloat(d.floatValue),
-                                          tx: CGFloat(tx.floatValue), ty: CGFloat(ty.floatValue))
+        if let t = dict.object("transform"),
+           let a = t.number("a"), let b = t.number("b"),
+           let c = t.number("c"), let d = t.number("d"),
+           let tx = t.number("tx"), let ty = t.number("ty") {
+            transform = CGAffineTransform(a: CGFloat(a), b: CGFloat(b),
+                                          c: CGFloat(c), d: CGFloat(d),
+                                          tx: CGFloat(tx), ty: CGFloat(ty))
         } else {
             transform = nil
         }
-    }
-
-    // MARK: - Helpers
-
-    private static func cgf(_ value: Any?) -> CGFloat {
-        (value as? NSNumber).map { CGFloat($0.floatValue) } ?? 0
     }
 }
