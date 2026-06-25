@@ -14,10 +14,10 @@ final class SVGAAudioLayer {
     ///
     /// - Parameters:
     ///   - audioItem: 音频片段的时间和资源信息。
-    ///   - videoItem: 提供音频数据的动画实体。
-    init(audioItem: SVGA.AudioEntity, videoItem: SVGA.VideoEntity) {
+    ///   - videoEntity: 提供音频数据的动画实体。
+    init(audioItem: SVGA.AudioEntity, videoEntity: SVGA.VideoEntity) {
         self.audioItem = audioItem
-        if let data = videoItem.audiosData[audioItem.audioKey] {
+        if let data = videoEntity.audiosData[audioItem.audioKey] {
             audioPlayer = try? AVAudioPlayer(data: data, fileTypeHint: "mp3")
             audioPlayer?.prepareToPlay()
         } else {

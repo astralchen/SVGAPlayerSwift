@@ -15,7 +15,7 @@ final class SVGAContentLayer: CALayer {
     }
 
     /// 当前帧布局完成后执行的自定义绘制回调。
-    var dynamicDrawingBlock: SVGADynamicDrawingBlock?
+    var dynamicDrawingBlock: SVGADynamicDrawingHandler?
 
     /// 渲染 sprite 位图内容的子 layer。
     var bitmapLayer: SVGABitmapLayer? {

@@ -1,5 +1,10 @@
 import UIKit
 
+/// 无视图预下载 SVGA 文件时使用的进度回调。
+///
+/// 回调参数位于 `0.0...1.0` 范围内。
+public typealias SVGAViewPreloadProgressHandler = @Sendable (_ progress: Double) -> Void
+
 // MARK: - Dynamic content configuration
 
 /// 播放 SVGA 动画时应用的动态内容配置。
@@ -20,12 +25,12 @@ public struct SVGADynamicContent {
     struct Item {
         var image: UIImage?
         var text: NSAttributedString?
-        var drawingBlock: SVGADynamicDrawingBlock?
+        var drawingBlock: SVGADynamicDrawingHandler?
         var hidden: Bool?
 
         init(image: UIImage? = nil,
              text: NSAttributedString? = nil,
-             drawingBlock: SVGADynamicDrawingBlock? = nil,
+             drawingBlock: SVGADynamicDrawingHandler? = nil,
              hidden: Bool? = nil) {
             self.image = image
             self.text = text
@@ -169,11 +174,11 @@ public enum SVGAViewEvent: Equatable, Sendable {
 }
 
 /// `SVGAView` 可加载的动画数据来源。
-public enum SVGAViewSource: CustomDebugStringConvertible {
+public enum SVGAViewSource: CustomDebugStringConvertible, Sendable {
     /// Bundle 中的 SVGA 资源名。
-    case named(String, bundle: Bundle?)
+    case named(String, bundle: Bundle? = nil)
     /// HTTP 或 HTTPS 资源 URL。
-    case url(URL)
+    case remoteURL(URL)
     /// 自定义网络请求。
     case request(URLRequest)
     /// 本地文件 URL。
@@ -186,14 +191,34 @@ public enum SVGAViewSource: CustomDebugStringConvertible {
         switch self {
         case .named(let name, _):
             return "named(\(name))"
-        case .url(let url):
-            return "url(\(url.absoluteString))"
+        case .remoteURL(let url):
+            return "remoteURL(\(url.absoluteString))"
         case .request(let request):
             return "request(\(request.url?.absoluteString ?? "nil"))"
         case .fileURL(let url):
             return "fileURL(\(url.path))"
         case .data(_, let cacheKey):
             return "data(cacheKey: \(cacheKey))"
+        }
+    }
+}
+
+private extension SVGAViewSource {
+    var usesLocalResourceFrameSize: Bool {
+        switch self {
+        case .named, .fileURL:
+            return true
+        case .remoteURL, .request, .data:
+            return false
+        }
+    }
+
+    var reportsDownloadProgress: Bool {
+        switch self {
+        case .remoteURL, .request:
+            return true
+        case .named, .fileURL, .data:
+            return false
         }
     }
 }
@@ -237,22 +262,23 @@ public enum SVGAViewSource: CustomDebugStringConvertible {
 /// 从网络加载：
 ///
 /// ```swift
-/// playerView.play(url: URL(string: "https://example.com/anim.svga")!)
+/// playerView.play(remoteURL: URL(string: "https://example.com/anim.svga")!)
 /// ```
 ///
-/// 在 Interface Builder 中，可以设置 `filePath` 为资源名、HTTP(S) URL、
+/// 在 Interface Builder 中，可以设置 `resourcePath` 为资源名、HTTP(S) URL、
 /// file URL 或本地绝对路径，并通过 `autoPlay` 控制是否自动播放。
 @MainActor
-public class SVGAView: UIView {
+open class SVGAView: UIView {
 
     // MARK: - Private engine
 
     private let engine = SVGAPlaybackEngine()
     private var loadTask: Task<Void, Never>?
-    private var loadGeneration: Int = 0
-    private var filePathLoadTask: Task<Void, Never>?
+    private var loadSequence: Int = 0
+    private var resourcePathLoadTask: Task<Void, Never>?
     private var isEngineConfigured = false
-    private var isRunningInspectableFilePathLoad = false
+    private var isPerformingInspectableResourcePathLoad = false
+    private var sizesFrameToNextLocalResourcePathLoad = false
 
     // MARK: - Public properties
 
@@ -288,8 +314,9 @@ public class SVGAView: UIView {
         set { engine.mainRunLoopMode = newValue }
     }
 
-    /// 一个布尔值，指示加载完成后是否自动开始播放。
+    /// 一个布尔值，指示 `resourcePath` 加载完成后是否自动开始播放。
     ///
+    /// `play` 方法始终会开始播放，`load` 方法使用 `startsPlayback` 显式控制。
     /// 默认值为 `true`。
     @IBInspectable public var autoPlay: Bool = true
 
@@ -315,9 +342,12 @@ public class SVGAView: UIView {
     ///
     /// 该值可以是 bundle 资源名、HTTP(S) URL、file URL 或本地绝对路径。
     /// 设置后会自动开始加载，并根据 `autoPlay` 决定是否播放。
-    @IBInspectable public var filePath: String? {
+    @IBInspectable public var resourcePath: String? {
         didSet {
-            scheduleInspectableFilePathLoad()
+            if oldValue != nil {
+                sizesFrameToNextLocalResourcePathLoad = false
+            }
+            scheduleInspectableResourcePathLoad()
         }
     }
 
@@ -331,6 +361,65 @@ public class SVGAView: UIView {
         setupEngine()
     }
 
+    /// 使用资源路径创建播放器视图，并在本地资源加载完成后使用资源尺寸作为初始 frame size。
+    ///
+    /// - Parameter resourcePath: bundle 资源名、file URL、本地绝对路径或 HTTP(S) URL。
+    public convenience init(resourcePath: String) {
+        self.init(frame: .zero)
+        let path = resourcePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        sizesFrameToNextLocalResourcePathLoad = !path.isEmpty
+        self.resourcePath = resourcePath
+        scheduleInspectableResourcePathLoad()
+    }
+
+    /// 使用 bundle 中的 SVGA 资源创建播放器视图。
+    ///
+    /// 加载完成后会根据 `autoPlay` 决定是否播放；如果初始 frame size 为 `.zero`，
+    /// 会使用资源的原始尺寸作为初始 frame size。
+    ///
+    /// - Parameters:
+    ///   - name: 资源名（不含 `.svga` 扩展名）。
+    ///   - bundle: 资源所在的 bundle。传入 `nil` 时使用 `Bundle.main`。
+    public convenience init(named name: String, in bundle: Bundle? = nil) {
+        self.init(frame: .zero)
+        startLoadTask(
+            source: .named(name, bundle: bundle),
+            dynamicContent: nil,
+            startsPlaybackAfterLoad: autoPlay,
+            sizesFrameToContentAfterLoad: true
+        )
+    }
+
+    /// 使用本地文件 URL 创建播放器视图。
+    ///
+    /// 加载完成后会根据 `autoPlay` 决定是否播放；如果初始 frame size 为 `.zero`，
+    /// 会使用资源的原始尺寸作为初始 frame size。
+    ///
+    /// - Parameter fileURL: 指向 SVGA 文件的本地文件 URL。
+    public convenience init(fileURL: URL) {
+        self.init(frame: .zero)
+        startLoadTask(
+            source: .fileURL(fileURL),
+            dynamicContent: nil,
+            startsPlaybackAfterLoad: autoPlay,
+            sizesFrameToContentAfterLoad: true
+        )
+    }
+
+    /// 使用 HTTP 或 HTTPS URL 创建播放器视图。
+    ///
+    /// 加载完成后会根据 `autoPlay` 决定是否播放。
+    ///
+    /// - Parameter remoteURL: SVGA 文件的 HTTP(S) URL。
+    public convenience init(remoteURL: URL) {
+        self.init(frame: .zero)
+        startLoadTask(
+            source: .remoteURL(remoteURL),
+            dynamicContent: nil,
+            startsPlaybackAfterLoad: autoPlay
+        )
+    }
+
     /// 从 storyboard 或 nib 反序列化播放器视图。
     ///
     /// - Parameter coder: 用于反序列化视图的 coder。
@@ -340,7 +429,7 @@ public class SVGAView: UIView {
     }
 
     private func setupEngine() {
-        engine.onDrawLayerChanged = { [weak self] newLayer in
+        engine.onRenderLayerChanged = { [weak self] newLayer in
             guard let self else { return }
             if let l = newLayer {
                 self.layer.addSublayer(l)
@@ -349,121 +438,350 @@ public class SVGAView: UIView {
         }
         engine.delegate = self
         isEngineConfigured = true
-        scheduleInspectableFilePathLoad()
+        scheduleInspectableResourcePathLoad()
     }
 
     private func emit(_ event: SVGAViewEvent) {
         onEvent?(event)
     }
 
-    private func scheduleInspectableFilePathLoad() {
-        filePathLoadTask?.cancel()
+    private func scheduleInspectableResourcePathLoad() {
+        resourcePathLoadTask?.cancel()
         guard isEngineConfigured else { return }
-        guard let path = filePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let path = resourcePath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !path.isEmpty
         else {
-            filePathLoadTask = nil
+            resourcePathLoadTask = nil
             return
         }
 
-        filePathLoadTask = Task { [weak self] in
+        resourcePathLoadTask = Task { [weak self] in
             await Task.yield()
             guard let self, !Task.isCancelled else { return }
-            guard self.filePath?.trimmingCharacters(in: .whitespacesAndNewlines) == path else { return }
-            self.loadInspectableFilePath(path)
-            self.filePathLoadTask = nil
+            guard self.resourcePath?.trimmingCharacters(in: .whitespacesAndNewlines) == path else { return }
+            self.loadInspectableResourcePath(path)
+            self.resourcePathLoadTask = nil
         }
     }
 
-    private func loadInspectableFilePath(_ path: String) {
-        isRunningInspectableFilePathLoad = true
-        defer { isRunningInspectableFilePathLoad = false }
+    private func loadInspectableResourcePath(_ path: String) {
+        isPerformingInspectableResourcePathLoad = true
+        defer { isPerformingInspectableResourcePathLoad = false }
+        let source = inspectableResourceSource(for: path)
+        let sizesFrameToContent = sizesFrameToNextLocalResourcePathLoad && source.usesLocalResourceFrameSize
+        sizesFrameToNextLocalResourcePathLoad = false
+        startLoadTask(
+            source: source,
+            dynamicContent: nil,
+            startsPlaybackAfterLoad: autoPlay,
+            sizesFrameToContentAfterLoad: sizesFrameToContent
+        )
+    }
+
+    private func inspectableResourceSource(for path: String) -> SVGAViewSource {
         if let url = URL(string: path),
            let scheme = url.scheme?.lowercased() {
             switch scheme {
             case "http", "https":
-                play(url: url)
+                return .remoteURL(url)
             case "file":
-                play(fileURL: url)
+                return .fileURL(url)
             default:
-                play(url: url)
+                return .remoteURL(url)
             }
         } else if path.hasPrefix("/") {
-            play(fileURL: URL(fileURLWithPath: path))
+            return .fileURL(URL(fileURLWithPath: path))
         } else {
-            play(named: path)
+            return .named(path, bundle: nil)
         }
     }
 
     // MARK: - UIView lifecycle
 
-    public override func willMove(toSuperview newSuperview: UIView?) {
+    open override func willMove(toSuperview newSuperview: UIView?) {
         super.willMove(toSuperview: newSuperview)
         if newSuperview == nil {
-            filePathLoadTask?.cancel()
-            filePathLoadTask = nil
+            resourcePathLoadTask?.cancel()
+            resourcePathLoadTask = nil
             cancelLoading(resetState: true)
-            engine.stopAnimation()
+            engine.stop()
             state = .stopped
         }
     }
 
-    public override func layoutSubviews() {
+    open override func layoutSubviews() {
         super.layoutSubviews()
         engine.resize(bounds: bounds.size, contentMode: contentMode)
     }
 
+    open override var intrinsicContentSize: CGSize {
+        engine.contentSize ?? super.intrinsicContentSize
+    }
+
+    open override func sizeThatFits(_ size: CGSize) -> CGSize {
+        engine.contentSize ?? super.sizeThatFits(size)
+    }
+
+    // MARK: - Preload
+
+    /// 无需创建视图，预先加载并缓存指定来源的 SVGA 文件。
+    ///
+    /// 该方法会完成下载、解压、解析和缓存。后续用相同来源 `play` 或 `load`
+    /// 时会复用缓存。
+    ///
+    /// - Parameters:
+    ///   - source: 动画数据来源。
+    ///   - progressHandler: 可选的下载进度回调。非网络来源会在成功后回调 `1.0`。
+    /// - Throws: 加载、解压或解析失败时抛出 `SVGAViewError`。
+    @concurrent public nonisolated static func preload(
+        _ source: SVGAViewSource,
+        progressHandler: SVGAViewPreloadProgressHandler? = nil
+    ) async throws {
+        do {
+            _ = try await fetchEntity(for: source, progressHandler: progressHandler)
+            if !source.reportsDownloadProgress {
+                progressHandler?(1.0)
+            }
+        } catch {
+            throw viewError(from: error)
+        }
+    }
+
+    /// 无需创建视图，预先加载并缓存 bundle 中的 SVGA 资源。
+    @concurrent public nonisolated static func preload(
+        named name: String,
+        in bundle: Bundle? = nil,
+        progressHandler: SVGAViewPreloadProgressHandler? = nil
+    ) async throws {
+        try await preload(.named(name, bundle: bundle), progressHandler: progressHandler)
+    }
+
+    /// 无需创建视图，预先下载并缓存 HTTP 或 HTTPS SVGA 文件。
+    @concurrent public nonisolated static func preload(
+        remoteURL url: URL,
+        progressHandler: SVGAViewPreloadProgressHandler? = nil
+    ) async throws {
+        try await preload(.remoteURL(url), progressHandler: progressHandler)
+    }
+
+    /// 无需创建视图，使用自定义请求预先下载并缓存 SVGA 文件。
+    @concurrent public nonisolated static func preload(
+        request: URLRequest,
+        progressHandler: SVGAViewPreloadProgressHandler? = nil
+    ) async throws {
+        try await preload(.request(request), progressHandler: progressHandler)
+    }
+
+    /// 无需创建视图，预先加载并缓存本地文件 URL 指向的 SVGA 文件。
+    @concurrent public nonisolated static func preload(
+        fileURL: URL,
+        progressHandler: SVGAViewPreloadProgressHandler? = nil
+    ) async throws {
+        try await preload(.fileURL(fileURL), progressHandler: progressHandler)
+    }
+
+    /// 无需创建视图，预先解析并缓存内存中的 SVGA 数据。
+    @concurrent public nonisolated static func preload(
+        data: Data,
+        cacheKey: String,
+        progressHandler: SVGAViewPreloadProgressHandler? = nil
+    ) async throws {
+        try await preload(.data(data, cacheKey: cacheKey), progressHandler: progressHandler)
+    }
+
     // MARK: - Play
 
-    /// 从 bundle 加载 SVGA 资源，并根据 `autoPlay` 决定是否播放。
+    /// 加载指定来源的 SVGA 文件并开始播放。
     ///
-    /// ```swift
-    /// // 加载 main bundle 中的 banner.svga
-    /// playerView.play(named: "banner")
+    /// `play` 的语义始终是加载并播放，不受 `autoPlay` 影响。`autoPlay` 仅用于
+    /// `resourcePath` 和 Interface Builder 加载。
     ///
-    /// // 加载指定 bundle 中的资源
-    /// playerView.play(named: "effect", in: frameworkBundle)
+    /// - Parameters:
+    ///   - source: 动画数据来源。
+    ///   - dynamicContent: 可选的动态内容配置。
+    public func play(_ source: SVGAViewSource, dynamicContent: SVGADynamicContent? = nil) {
+        startLoadTask(source: source, dynamicContent: dynamicContent, startsPlaybackAfterLoad: true)
+    }
+
+    /// 加载指定来源的 SVGA 文件，配置动态内容后开始播放。
     ///
-    /// // 带动态内容
-    /// var content = SVGADynamicContent()
-    /// content.setImage(avatar, forKey: "avatar")
-    /// playerView.play(named: "gift", dynamicContent: content)
-    /// ```
+    /// - Parameters:
+    ///   - source: 动画数据来源。
+    ///   - configureDynamicContent: 动态内容配置闭包。
+    public func play(
+        _ source: SVGAViewSource,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) {
+        play(source, dynamicContent: makeDynamicContent(configureDynamicContent))
+    }
+
+    /// 从 bundle 加载 SVGA 资源并开始播放。
     ///
     /// - Parameters:
     ///   - name: 资源名（不含 `.svga` 扩展名）。
     ///   - bundle: 资源所在的 bundle。传入 `nil` 时使用 `Bundle.main`。
     ///   - dynamicContent: 可选的动态内容配置。
     public func play(named name: String, in bundle: Bundle? = nil, dynamicContent: SVGADynamicContent? = nil) {
-        startLoadTask(source: .named(name, bundle: bundle), dynamicContent: dynamicContent, autoStart: autoPlay)
+        play(.named(name, bundle: bundle), dynamicContent: dynamicContent)
     }
 
-    /// 从 HTTP 或 HTTPS URL 加载 SVGA 文件，并根据 `autoPlay` 决定是否播放。
-    ///
-    /// ```swift
-    /// let url = URL(string: "https://cdn.example.com/animation.svga")!
-    /// playerView.play(url: url)
-    /// ```
+    /// 从 bundle 加载 SVGA 资源，配置动态内容后开始播放。
+    public func play(
+        named name: String,
+        in bundle: Bundle? = nil,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) {
+        play(.named(name, bundle: bundle), configureDynamicContent: configureDynamicContent)
+    }
+
+    /// 从 HTTP 或 HTTPS URL 加载 SVGA 文件并开始播放。
     ///
     /// - Parameters:
     ///   - url: SVGA 文件的 HTTP(S) URL。
     ///   - dynamicContent: 可选的动态内容配置。
-    public func play(url: URL, dynamicContent: SVGADynamicContent? = nil) {
-        startLoadTask(source: .url(url), dynamicContent: dynamicContent, autoStart: autoPlay)
+    public func play(remoteURL url: URL, dynamicContent: SVGADynamicContent? = nil) {
+        play(.remoteURL(url), dynamicContent: dynamicContent)
+    }
+
+    /// 从 HTTP 或 HTTPS URL 加载 SVGA 文件，配置动态内容后开始播放。
+    public func play(
+        remoteURL url: URL,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) {
+        play(.remoteURL(url), configureDynamicContent: configureDynamicContent)
+    }
+
+    /// 使用自定义请求加载 SVGA 文件并开始播放。
+    ///
+    /// - Parameters:
+    ///   - request: 用于下载 SVGA 文件的请求。
+    ///   - dynamicContent: 可选的动态内容配置。
+    public func play(request: URLRequest, dynamicContent: SVGADynamicContent? = nil) {
+        play(.request(request), dynamicContent: dynamicContent)
+    }
+
+    /// 使用自定义请求加载 SVGA 文件，配置动态内容后开始播放。
+    public func play(
+        request: URLRequest,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) {
+        play(.request(request), configureDynamicContent: configureDynamicContent)
+    }
+
+    /// 从本地文件 URL 加载 SVGA 文件并开始播放。
+    ///
+    /// - Parameters:
+    ///   - fileURL: 指向 SVGA 文件的本地文件 URL。
+    ///   - dynamicContent: 可选的动态内容配置。
+    public func play(fileURL: URL, dynamicContent: SVGADynamicContent? = nil) {
+        play(.fileURL(fileURL), dynamicContent: dynamicContent)
+    }
+
+    /// 从本地文件 URL 加载 SVGA 文件，配置动态内容后开始播放。
+    public func play(
+        fileURL: URL,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) {
+        play(.fileURL(fileURL), configureDynamicContent: configureDynamicContent)
+    }
+
+    /// 从内存数据加载 SVGA 文件并开始播放。
+    ///
+    /// - Parameters:
+    ///   - data: SVGA 文件数据。
+    ///   - cacheKey: 用于读写内存缓存和磁盘缓存的稳定 key。
+    ///   - dynamicContent: 可选的动态内容配置。
+    public func play(data: Data, cacheKey: String, dynamicContent: SVGADynamicContent? = nil) {
+        play(.data(data, cacheKey: cacheKey), dynamicContent: dynamicContent)
+    }
+
+    /// 从内存数据加载 SVGA 文件，配置动态内容后开始播放。
+    public func play(
+        data: Data,
+        cacheKey: String,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) {
+        play(.data(data, cacheKey: cacheKey), configureDynamicContent: configureDynamicContent)
+    }
+
+    // MARK: - Load
+
+    /// 加载指定来源的 SVGA 文件。
+    ///
+    /// 默认只加载动画，不会自动开始播放。需要加载完成后立即播放时，传入
+    /// `startsPlayback: true`。
+    ///
+    /// - Parameters:
+    ///   - source: 动画数据来源。
+    ///   - dynamicContent: 可选的动态内容配置。
+    ///   - startsPlayback: `true` 表示加载完成后立即播放。
+    /// - Throws: 加载、解压或解析失败时抛出 `SVGAViewError`。
+    public func load(
+        _ source: SVGAViewSource,
+        dynamicContent: SVGADynamicContent? = nil,
+        startsPlayback: Bool = false
+    ) async throws {
+        resourcePathLoadTask?.cancel()
+        resourcePathLoadTask = nil
+        cancelLoading(resetState: false)
+        beginLoadingState()
+        do {
+            try await performLoad(source: source, dynamicContent: dynamicContent)
+            state = .ready
+            emit(.ready)
+            if startsPlayback {
+                start()
+            }
+        } catch {
+            let mapped = Self.viewError(from: error)
+            state = .failed(mapped)
+            emit(.loadFailed(mapped))
+            throw mapped
+        }
+    }
+
+    /// 加载指定来源的 SVGA 文件，并在加载前配置动态内容。
+    public func load(
+        _ source: SVGAViewSource,
+        startsPlayback: Bool = false,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) async throws {
+        try await load(
+            source,
+            dynamicContent: makeDynamicContent(configureDynamicContent),
+            startsPlayback: startsPlayback
+        )
     }
 
     /// 从 bundle 加载 SVGA 资源并准备播放。
-    ///
-    /// 该方法只加载动画，不会自动开始播放。加载完成后调用 `startAnimation()`
-    /// 开始播放。
     ///
     /// - Parameters:
     ///   - name: 资源名（不含 `.svga` 扩展名）。
     ///   - bundle: 资源所在的 bundle。传入 `nil` 时使用 `Bundle.main`。
     ///   - dynamicContent: 可选的动态内容配置。
+    ///   - startsPlayback: `true` 表示加载完成后立即播放。
     /// - Throws: 加载、解压或解析失败时抛出 `SVGAViewError`。
-    public func load(named name: String, in bundle: Bundle? = nil, dynamicContent: SVGADynamicContent? = nil) async throws {
-        try await load(source: .named(name, bundle: bundle), dynamicContent: dynamicContent)
+    public func load(
+        named name: String,
+        in bundle: Bundle? = nil,
+        dynamicContent: SVGADynamicContent? = nil,
+        startsPlayback: Bool = false
+    ) async throws {
+        try await load(.named(name, bundle: bundle), dynamicContent: dynamicContent, startsPlayback: startsPlayback)
+    }
+
+    /// 从 bundle 加载 SVGA 资源，并在加载前配置动态内容。
+    public func load(
+        named name: String,
+        in bundle: Bundle? = nil,
+        startsPlayback: Bool = false,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) async throws {
+        try await load(
+            .named(name, bundle: bundle),
+            startsPlayback: startsPlayback,
+            configureDynamicContent: configureDynamicContent
+        )
     }
 
     /// 从 HTTP 或 HTTPS URL 加载 SVGA 文件并准备播放。
@@ -471,9 +789,23 @@ public class SVGAView: UIView {
     /// - Parameters:
     ///   - url: SVGA 文件的远程 URL。
     ///   - dynamicContent: 可选的动态内容配置。
+    ///   - startsPlayback: `true` 表示加载完成后立即播放。
     /// - Throws: 加载、解压或解析失败时抛出 `SVGAViewError`。
-    public func load(url: URL, dynamicContent: SVGADynamicContent? = nil) async throws {
-        try await load(source: .url(url), dynamicContent: dynamicContent)
+    public func load(
+        remoteURL url: URL,
+        dynamicContent: SVGADynamicContent? = nil,
+        startsPlayback: Bool = false
+    ) async throws {
+        try await load(.remoteURL(url), dynamicContent: dynamicContent, startsPlayback: startsPlayback)
+    }
+
+    /// 从 HTTP 或 HTTPS URL 加载 SVGA 文件，并在加载前配置动态内容。
+    public func load(
+        remoteURL url: URL,
+        startsPlayback: Bool = false,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) async throws {
+        try await load(.remoteURL(url), startsPlayback: startsPlayback, configureDynamicContent: configureDynamicContent)
     }
 
     /// 使用自定义请求加载 SVGA 文件并准备播放。
@@ -481,9 +813,23 @@ public class SVGAView: UIView {
     /// - Parameters:
     ///   - request: 用于下载 SVGA 文件的请求。
     ///   - dynamicContent: 可选的动态内容配置。
+    ///   - startsPlayback: `true` 表示加载完成后立即播放。
     /// - Throws: 加载、解压或解析失败时抛出 `SVGAViewError`。
-    public func load(request: URLRequest, dynamicContent: SVGADynamicContent? = nil) async throws {
-        try await load(source: .request(request), dynamicContent: dynamicContent)
+    public func load(
+        request: URLRequest,
+        dynamicContent: SVGADynamicContent? = nil,
+        startsPlayback: Bool = false
+    ) async throws {
+        try await load(.request(request), dynamicContent: dynamicContent, startsPlayback: startsPlayback)
+    }
+
+    /// 使用自定义请求加载 SVGA 文件，并在加载前配置动态内容。
+    public func load(
+        request: URLRequest,
+        startsPlayback: Bool = false,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) async throws {
+        try await load(.request(request), startsPlayback: startsPlayback, configureDynamicContent: configureDynamicContent)
     }
 
     /// 从本地文件 URL 加载 SVGA 文件并准备播放。
@@ -491,9 +837,23 @@ public class SVGAView: UIView {
     /// - Parameters:
     ///   - fileURL: 指向 SVGA 文件的本地文件 URL。
     ///   - dynamicContent: 可选的动态内容配置。
+    ///   - startsPlayback: `true` 表示加载完成后立即播放。
     /// - Throws: 加载、解压或解析失败时抛出 `SVGAViewError`。
-    public func load(fileURL: URL, dynamicContent: SVGADynamicContent? = nil) async throws {
-        try await load(source: .fileURL(fileURL), dynamicContent: dynamicContent)
+    public func load(
+        fileURL: URL,
+        dynamicContent: SVGADynamicContent? = nil,
+        startsPlayback: Bool = false
+    ) async throws {
+        try await load(.fileURL(fileURL), dynamicContent: dynamicContent, startsPlayback: startsPlayback)
+    }
+
+    /// 从本地文件 URL 加载 SVGA 文件，并在加载前配置动态内容。
+    public func load(
+        fileURL: URL,
+        startsPlayback: Bool = false,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) async throws {
+        try await load(.fileURL(fileURL), startsPlayback: startsPlayback, configureDynamicContent: configureDynamicContent)
     }
 
     /// 从内存数据加载 SVGA 文件并准备播放。
@@ -502,35 +862,29 @@ public class SVGAView: UIView {
     ///   - data: SVGA 文件数据。
     ///   - cacheKey: 用于读写内存缓存和磁盘缓存的稳定 key。
     ///   - dynamicContent: 可选的动态内容配置。
+    ///   - startsPlayback: `true` 表示加载完成后立即播放。
     /// - Throws: 解压或解析失败时抛出 `SVGAViewError`。
-    public func load(data: Data, cacheKey: String, dynamicContent: SVGADynamicContent? = nil) async throws {
-        try await load(source: .data(data, cacheKey: cacheKey), dynamicContent: dynamicContent)
+    public func load(
+        data: Data,
+        cacheKey: String,
+        dynamicContent: SVGADynamicContent? = nil,
+        startsPlayback: Bool = false
+    ) async throws {
+        try await load(.data(data, cacheKey: cacheKey), dynamicContent: dynamicContent, startsPlayback: startsPlayback)
     }
 
-    /// 加载指定来源的 SVGA 文件并准备播放。
-    ///
-    /// 该方法只加载动画，不会自动开始播放。加载完成后，播放器状态变为
-    /// `SVGAViewState.ready`。
-    ///
-    /// - Parameters:
-    ///   - source: 动画数据来源。
-    ///   - dynamicContent: 可选的动态内容配置。
-    /// - Throws: 加载、解压或解析失败时抛出 `SVGAViewError`。
-    public func load(source: SVGAViewSource, dynamicContent: SVGADynamicContent? = nil) async throws {
-        filePathLoadTask?.cancel()
-        filePathLoadTask = nil
-        cancelLoading(resetState: false)
-        beginLoadingState()
-        do {
-            try await performLoad(source: source, dynamicContent: dynamicContent)
-            state = .ready
-            emit(.ready)
-        } catch {
-            let mapped = playerError(from: error)
-            state = .failed(mapped)
-            emit(.loadFailed(mapped))
-            throw mapped
-        }
+    /// 从内存数据加载 SVGA 文件，并在加载前配置动态内容。
+    public func load(
+        data: Data,
+        cacheKey: String,
+        startsPlayback: Bool = false,
+        configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) async throws {
+        try await load(
+            .data(data, cacheKey: cacheKey),
+            startsPlayback: startsPlayback,
+            configureDynamicContent: configureDynamicContent
+        )
     }
 
     /// 取消当前正在进行的加载任务。
@@ -539,7 +893,7 @@ public class SVGAView: UIView {
     }
 
     private func cancelLoading(resetState: Bool) {
-        loadGeneration += 1
+        loadSequence += 1
         loadTask?.cancel()
         loadTask = nil
         if resetState, state.isLoading {
@@ -547,84 +901,104 @@ public class SVGAView: UIView {
         }
     }
 
-    /// 使用自定义请求加载 SVGA 文件，并根据 `autoPlay` 决定是否播放。
-    ///
-    /// - Parameters:
-    ///   - request: 用于下载 SVGA 文件的请求。
-    ///   - dynamicContent: 可选的动态内容配置。
-    public func play(request: URLRequest, dynamicContent: SVGADynamicContent? = nil) {
-        startLoadTask(source: .request(request), dynamicContent: dynamicContent, autoStart: autoPlay)
+    private func makeDynamicContent(
+        _ configureDynamicContent: (inout SVGADynamicContent) -> Void
+    ) -> SVGADynamicContent {
+        var dynamicContent = SVGADynamicContent()
+        configureDynamicContent(&dynamicContent)
+        return dynamicContent
     }
 
-    /// 从本地文件 URL 加载 SVGA 文件，并根据 `autoPlay` 决定是否播放。
-    ///
-    /// - Parameters:
-    ///   - fileURL: 指向 SVGA 文件的本地文件 URL。
-    ///   - dynamicContent: 可选的动态内容配置。
-    public func play(fileURL: URL, dynamicContent: SVGADynamicContent? = nil) {
-        startLoadTask(source: .fileURL(fileURL), dynamicContent: dynamicContent, autoStart: autoPlay)
+    private func startLoadTask(
+        source: SVGAViewSource,
+        dynamicContent: SVGADynamicContent?,
+        startsPlaybackAfterLoad: Bool
+    ) {
+        startLoadTask(
+            source: source,
+            dynamicContent: dynamicContent,
+            startsPlaybackAfterLoad: startsPlaybackAfterLoad,
+            sizesFrameToContentAfterLoad: false
+        )
     }
 
-    /// 从内存数据加载 SVGA 文件，并根据 `autoPlay` 决定是否播放。
-    ///
-    /// - Parameters:
-    ///   - data: SVGA 文件数据。
-    ///   - cacheKey: 用于读写内存缓存和磁盘缓存的稳定 key。
-    ///   - dynamicContent: 可选的动态内容配置。
-    public func play(data: Data, cacheKey: String, dynamicContent: SVGADynamicContent? = nil) {
-        startLoadTask(source: .data(data, cacheKey: cacheKey), dynamicContent: dynamicContent, autoStart: autoPlay)
-    }
-
-    private func startLoadTask(source: SVGAViewSource, dynamicContent: SVGADynamicContent?, autoStart: Bool) {
-        if !isRunningInspectableFilePathLoad {
-            filePathLoadTask?.cancel()
-            filePathLoadTask = nil
+    private func startLoadTask(
+        source: SVGAViewSource,
+        dynamicContent: SVGADynamicContent?,
+        startsPlaybackAfterLoad: Bool,
+        sizesFrameToContentAfterLoad: Bool
+    ) {
+        if !isPerformingInspectableResourcePathLoad {
+            resourcePathLoadTask?.cancel()
+            resourcePathLoadTask = nil
         }
         cancelLoading(resetState: false)
         beginLoadingState()
-        let generation = loadGeneration
+        let sequence = loadSequence
         loadTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.performLoad(source: source, dynamicContent: dynamicContent)
-                guard !Task.isCancelled, self.loadGeneration == generation else { return }
+                try await self.performLoad(
+                    source: source,
+                    dynamicContent: dynamicContent,
+                    sizesFrameToContentAfterLoad: sizesFrameToContentAfterLoad
+                )
+                guard !Task.isCancelled, self.loadSequence == sequence else { return }
                 self.state = .ready
                 self.emit(.ready)
-                if autoStart {
-                    self.startAnimation()
+                if startsPlaybackAfterLoad {
+                    self.start()
                 }
             } catch {
-                guard !Task.isCancelled, self.loadGeneration == generation else { return }
-                let mapped = self.playerError(from: error)
+                guard !Task.isCancelled, self.loadSequence == sequence else { return }
+                let mapped = Self.viewError(from: error)
                 self.state = .failed(mapped)
                 self.emit(.loadFailed(mapped))
             }
-            if self.loadGeneration == generation {
+            if self.loadSequence == sequence {
                 self.loadTask = nil
             }
         }
     }
 
-    private func performLoad(source: SVGAViewSource, dynamicContent: SVGADynamicContent?) async throws {
+    private func performLoad(
+        source: SVGAViewSource,
+        dynamicContent: SVGADynamicContent?,
+        sizesFrameToContentAfterLoad: Bool = false
+    ) async throws {
         let progressHandler = makeProgressHandler()
-        let entity = try await fetchEntity(for: source, progressHandler: progressHandler)
+        let entity = try await Self.fetchEntity(for: source, progressHandler: progressHandler)
         try Task.checkCancellation()
-        engine.clearDynamicObjects()
+        engine.clearDynamicContent()
         if let content = dynamicContent {
             applyDynamicContent(content)
         }
         try Task.checkCancellation()
-        engine.videoItem = entity
+        if sizesFrameToContentAfterLoad {
+            applyInitialResourceFrameSize(entity.videoSize)
+        }
+        engine.videoEntity = entity
+        invalidateIntrinsicContentSize()
     }
 
-    private func fetchEntity(
+    private func applyInitialResourceFrameSize(_ size: CGSize) {
+        guard bounds.size == .zero,
+              size.width > 0,
+              size.height > 0
+        else { return }
+        var initialFrame = frame
+        initialFrame.size = size
+        frame = initialFrame
+    }
+
+    private nonisolated static func fetchEntity(
         for source: SVGAViewSource,
         progressHandler: SVGADownloadProgressHandler?
     ) async throws -> SVGA.VideoEntity {
         switch source {
         case .named(let name, let bundle):
             return try await SVGAParser.shared.parse(named: name, in: bundle)
-        case .url(let url):
+        case .remoteURL(let url):
             try validateRemoteURL(url)
             return try await SVGAParser.shared.parse(url: url, progressHandler: progressHandler)
         case .request(let request):
@@ -643,7 +1017,7 @@ public class SVGAView: UIView {
         }
     }
 
-    private func validateRemoteURL(_ url: URL) throws {
+    private nonisolated static func validateRemoteURL(_ url: URL) throws {
         let scheme = url.scheme?.lowercased()
         guard scheme == "http" || scheme == "https" else {
             throw SVGAViewError.unsupportedURLScheme(url.scheme)
@@ -662,12 +1036,12 @@ public class SVGAView: UIView {
         state = .loading
     }
 
-    private func playerError(from error: Error) -> SVGAViewError {
+    private nonisolated static func viewError(from error: Error) -> SVGAViewError {
         if error is CancellationError {
             return .cancelled
         }
-        if let playerError = error as? SVGAViewError {
-            return playerError
+        if let viewError = error as? SVGAViewError {
+            return viewError
         }
         if let parserError = error as? SVGAParserError {
             switch parserError {
@@ -778,16 +1152,16 @@ public class SVGAView: UIView {
 
     /// 清除所有动态内容（图片、文本、绘制回调、隐藏状态）。
     public func clearDynamicContent() {
-        engine.clearDynamicObjects()
+        engine.clearDynamicContent()
     }
 
     // MARK: - Playback control
 
     /// 从当前动画的第一帧开始播放全部帧。
     ///
-    /// 需要先通过 `load(source:dynamicContent:)` 或任一 `play` 方法加载数据。
-    public func startAnimation() {
-        if engine.startAnimation() {
+    /// 需要先通过 `load(_:dynamicContent:startsPlayback:)` 或任一 `play` 方法加载数据。
+    public func start() {
+        if engine.start() {
             state = .playing
         }
     }
@@ -796,24 +1170,24 @@ public class SVGAView: UIView {
     ///
     /// ```swift
     /// // 播放第 10 ~ 30 帧，正向
-    /// playerView.startAnimation(range: 10..<30, reverse: false)
+    /// playerView.start(range: 10..<30, reverse: false)
     ///
     /// // 倒放第 0 ~ 20 帧
-    /// playerView.startAnimation(range: 0..<20, reverse: true)
+    /// playerView.start(range: 0..<20, reverse: true)
     /// ```
     ///
     /// - Parameters:
     ///   - range: 要播放的帧范围。范围会被限制在动画的有效帧范围内。
     ///   - reverse: 是否倒放。
-    public func startAnimation(range: Range<Int>, reverse: Bool) {
-        if engine.startAnimation(range: range, reverse: reverse) {
+    public func start(range: Range<Int>, reverse: Bool) {
+        if engine.start(range: range, reverse: reverse) {
             state = .playing
         }
     }
 
     /// 暂停动画，保留当前画面。
-    public func pauseAnimation() {
-        if engine.pauseAnimation() {
+    public func pause() {
+        if engine.pause() {
             state = .paused
         }
     }
@@ -821,19 +1195,19 @@ public class SVGAView: UIView {
     /// 停止动画。
     ///
     /// 是否清除画面取决于 `clearsAfterStop`。
-    public func stopAnimation() {
-        stopAnimation(cancelLoading: true)
+    public func stop() {
+        stop(cancelLoading: true)
     }
 
     /// 停止动画，并可选择是否取消正在进行的加载任务。
     ///
     /// - Parameter shouldCancelLoading: `true` 表示同时取消当前加载任务。
-    public func stopAnimation(cancelLoading shouldCancelLoading: Bool) {
+    public func stop(cancelLoading shouldCancelLoading: Bool) {
         let wasLoading = state.isLoading
         if shouldCancelLoading {
             cancelLoading(resetState: true)
         }
-        engine.stopAnimation()
+        engine.stop()
         state = wasLoading && shouldCancelLoading ? .idle : .stopped
     }
 
@@ -841,34 +1215,34 @@ public class SVGAView: UIView {
     ///
     /// ```swift
     /// // 跳转到第 5 帧并暂停
-    /// playerView.step(toFrame: 5, andPlay: false)
+    /// playerView.seek(toFrame: 5, startsPlayback: false)
     ///
     /// // 跳转到第 10 帧并继续播放
-    /// playerView.step(toFrame: 10, andPlay: true)
+    /// playerView.seek(toFrame: 10, startsPlayback: true)
     /// ```
     ///
     /// - Parameters:
     ///   - frame: 目标帧索引。
-    ///   - andPlay: `true` 表示跳转后继续播放，`false` 表示跳转后暂停。
-    public func step(toFrame frame: Int, andPlay: Bool) {
-        if engine.step(toFrame: frame, andPlay: andPlay) {
-            state = andPlay ? .playing : .paused
+    ///   - startsPlayback: `true` 表示跳转后继续播放，`false` 表示跳转后暂停。
+    public func seek(toFrame frame: Int, startsPlayback: Bool) {
+        if engine.seek(toFrame: frame, startsPlayback: startsPlayback) {
+            state = startsPlayback ? .playing : .paused
         }
     }
 
-    /// 跳转到指定百分比位置。
+    /// 跳转到指定进度。
     ///
     /// ```swift
     /// // 跳转到 50% 位置并暂停
-    /// playerView.step(toPercentage: 0.5, andPlay: false)
+    /// playerView.seek(toProgress: 0.5, startsPlayback: false)
     /// ```
     ///
     /// - Parameters:
-    ///   - percentage: 目标播放进度。取值会被限制在 `0.0...1.0` 范围内。
-    ///   - andPlay: `true` 表示跳转后继续播放，`false` 表示跳转后暂停。
-    public func step(toPercentage percentage: CGFloat, andPlay: Bool) {
-        if engine.step(toPercentage: percentage, andPlay: andPlay) {
-            state = andPlay ? .playing : .paused
+    ///   - progress: 目标播放进度。取值会被限制在 `0.0...1.0` 范围内。
+    ///   - startsPlayback: `true` 表示跳转后继续播放，`false` 表示跳转后暂停。
+    public func seek(toProgress progress: CGFloat, startsPlayback: Bool) {
+        if engine.seek(toProgress: progress, startsPlayback: startsPlayback) {
+            state = startsPlayback ? .playing : .paused
         }
     }
 
@@ -892,16 +1266,16 @@ public class SVGAView: UIView {
 // MARK: - SVGAPlaybackEngineDelegate (bridge engine events to callbacks)
 
 extension SVGAView: SVGAPlaybackEngineDelegate {
-    func svgaPlaybackEngineDidFinishAnimation(_ player: SVGAPlaybackEngine) {
+    func svgaPlaybackEngineDidFinishAnimation(_ engine: SVGAPlaybackEngine) {
         state = .stopped
         emit(.finished)
     }
 
-    func svgaPlaybackEngine(_ player: SVGAPlaybackEngine, didAnimateToFrame frame: Int) {
+    func svgaPlaybackEngine(_ engine: SVGAPlaybackEngine, didAnimateToFrame frame: Int) {
         emit(.frameChanged(frame))
     }
 
-    func svgaPlaybackEngine(_ player: SVGAPlaybackEngine, didAnimateToPercentage percentage: CGFloat) {
+    func svgaPlaybackEngine(_ engine: SVGAPlaybackEngine, didAnimateToPercentage percentage: CGFloat) {
         emit(.percentageChanged(percentage))
     }
 }

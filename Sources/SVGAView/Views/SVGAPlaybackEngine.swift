@@ -6,14 +6,14 @@ import AVFoundation
 /// 在 sprite layer 完成当前帧布局后执行的自定义绘制回调。
 ///
 /// 回调参数依次为 sprite 所在的 layer 和当前帧索引。
-typealias SVGADynamicDrawingBlock = @MainActor @Sendable (CALayer, Int) -> Void
+typealias SVGADynamicDrawingHandler = @MainActor @Sendable (CALayer, Int) -> Void
 
 /// 动画结束后的填充模式。
 public enum SVGAFillMode: Sendable {
     /// 停留在播放范围的最后一帧。
-    case forward
+    case lastFrame
     /// 停留在播放范围的第一帧。
-    case backward
+    case firstFrame
     /// 清除画面。
     case clear
 }
@@ -23,15 +23,15 @@ public enum SVGAFillMode: Sendable {
 /// 该协议仅供内部桥接使用。公开事件通过 `SVGAView` 的回调暴露。
 @MainActor
 protocol SVGAPlaybackEngineDelegate: AnyObject {
-    func svgaPlaybackEngineDidFinishAnimation(_ player: SVGAPlaybackEngine)
-    func svgaPlaybackEngine(_ player: SVGAPlaybackEngine, didAnimateToFrame frame: Int)
-    func svgaPlaybackEngine(_ player: SVGAPlaybackEngine, didAnimateToPercentage percentage: CGFloat)
+    func svgaPlaybackEngineDidFinishAnimation(_ engine: SVGAPlaybackEngine)
+    func svgaPlaybackEngine(_ engine: SVGAPlaybackEngine, didAnimateToFrame frame: Int)
+    func svgaPlaybackEngine(_ engine: SVGAPlaybackEngine, didAnimateToPercentage percentage: CGFloat)
 }
 
 extension SVGAPlaybackEngineDelegate {
-    func svgaPlaybackEngineDidFinishAnimation(_ player: SVGAPlaybackEngine) {}
-    func svgaPlaybackEngine(_ player: SVGAPlaybackEngine, didAnimateToFrame frame: Int) {}
-    func svgaPlaybackEngine(_ player: SVGAPlaybackEngine, didAnimateToPercentage percentage: CGFloat) {}
+    func svgaPlaybackEngineDidFinishAnimation(_ engine: SVGAPlaybackEngine) {}
+    func svgaPlaybackEngine(_ engine: SVGAPlaybackEngine, didAnimateToFrame frame: Int) {}
+    func svgaPlaybackEngine(_ engine: SVGAPlaybackEngine, didAnimateToPercentage percentage: CGFloat) {}
 }
 
 // MARK: - SVGAPlaybackEngine (Animation Engine)
@@ -40,7 +40,7 @@ extension SVGAPlaybackEngineDelegate {
 ///
 /// `SVGAPlaybackEngine` 管理帧推进、layer 树构建、音频同步和动态内容替换。
 /// 它不直接依赖 `UIView`，由 `SVGAView` 负责承载最终的
-/// `drawLayer`。
+/// `renderLayer`。
 @MainActor
 final class SVGAPlaybackEngine {
 
@@ -49,9 +49,9 @@ final class SVGAPlaybackEngine {
     /// 当前动画数据。
     ///
     /// 设置该属性会重置播放范围、当前帧和循环计数，并重新构建渲染 layer。
-    var videoItem: SVGA.VideoEntity? {
+    var videoEntity: SVGA.VideoEntity? {
         didSet {
-            guard let item = videoItem else { return }
+            guard let item = videoEntity else { return }
             currentRange = 0..<item.frames
             reversing = false
             currentFrame = 0
@@ -70,7 +70,7 @@ final class SVGAPlaybackEngine {
     var clearsAfterStop: Bool = true
 
     /// 动画结束后保留的画面。
-    var fillMode: SVGAFillMode = .forward
+    var fillMode: SVGAFillMode = .lastFrame
 
     /// 驱动动画的 display link 所使用的 run loop 模式。
     var mainRunLoopMode: RunLoop.Mode = .common
@@ -81,12 +81,17 @@ final class SVGAPlaybackEngine {
     /// 当前渲染图层。
     ///
     /// 该 layer 由引擎创建和管理，宿主视图只负责把它挂载到自身 layer 上。
-    private(set) var drawLayer: CALayer?
+    private(set) var renderLayer: CALayer?
+
+    /// 当前动画画布的原始尺寸。
+    var contentSize: CGSize? {
+        videoEntity?.videoSize
+    }
 
     /// 渲染图层变化时调用的回调。
     ///
-    /// `SVGAView` 通过该回调挂载或移除 `drawLayer`。
-    var onDrawLayerChanged: ((CALayer?) -> Void)?
+    /// `SVGAView` 通过该回调挂载或移除 `renderLayer`。
+    var onRenderLayerChanged: ((CALayer?) -> Void)?
 
     // MARK: - Private state
 
@@ -95,10 +100,10 @@ final class SVGAPlaybackEngine {
     private var displayLinkProxy: DisplayLinkProxy?
     private var currentFrame: Int = 0
     private var contentLayers: [SVGAContentLayer] = []
-    private var dynamicImages: [String: UIImage] = [:]
-    private var dynamicTexts: [String: NSAttributedString] = [:]
-    private var dynamicDrawings: [String: SVGADynamicDrawingBlock] = [:]
-    private var dynamicHiddens: [String: Bool] = [:]
+    private var imageOverrides: [String: UIImage] = [:]
+    private var textOverrides: [String: NSAttributedString] = [:]
+    private var drawingHandlers: [String: SVGADynamicDrawingHandler] = [:]
+    private var hiddenOverrides: [String: Bool] = [:]
     private var loopCount: Int = 0
     private var currentRange: Range<Int> = 0..<0
     private var forwardAnimating: Bool = false
@@ -144,11 +149,11 @@ final class SVGAPlaybackEngine {
     ///
     /// - Returns: 动画开始播放时返回 `true`；没有可播放数据或帧率无效时返回 `false`。
     @discardableResult
-    func startAnimation() -> Bool {
-        guard let item = videoItem else { return false }
+    func start() -> Bool {
+        guard let item = videoEntity else { return false }
         guard item.fps > 0 else { return false }
-        if drawLayer == nil { draw() }
-        stopAnimation(clear: false)
+        if renderLayer == nil { draw() }
+        stop(clear: false)
         loopCount = 0
         currentRange = 0..<item.frames
         forwardAnimating = !reversing
@@ -163,13 +168,13 @@ final class SVGAPlaybackEngine {
     ///   - reverse: `true` 表示倒放该范围。
     /// - Returns: 动画开始播放时返回 `true`；没有可播放数据、帧率无效或范围为空时返回 `false`。
     @discardableResult
-    func startAnimation(range: Range<Int>, reverse: Bool) -> Bool {
-        guard let item = videoItem else { return false }
+    func start(range: Range<Int>, reverse: Bool) -> Bool {
+        guard let item = videoEntity else { return false }
         guard item.fps > 0 else { return false }
         let clampedRange = max(0, range.lowerBound)..<min(item.frames, range.upperBound)
         guard !clampedRange.isEmpty else { return false }
-        if drawLayer == nil { draw() }
-        stopAnimation(clear: false)
+        if renderLayer == nil { draw() }
+        stop(clear: false)
         loopCount = 0
         currentRange = clampedRange
         reversing = reverse
@@ -185,34 +190,34 @@ final class SVGAPlaybackEngine {
     ///
     /// - Returns: 暂停成功时返回 `true`；尚未加载动画时返回 `false`。
     @discardableResult
-    func pauseAnimation() -> Bool {
-        guard videoItem != nil else { return false }
-        stopAnimation(clear: false)
+    func pause() -> Bool {
+        guard videoEntity != nil else { return false }
+        stop(clear: false)
         return true
     }
 
     /// 停止动画。
     ///
     /// 是否清除画面取决于 `clearsAfterStop`。
-    func stopAnimation() {
-        stopAnimation(clear: clearsAfterStop)
+    func stop() {
+        stop(clear: clearsAfterStop)
     }
 
     /// 跳转到指定帧，并可选择跳转后是否继续播放。
     ///
     /// - Parameters:
     ///   - frame: 目标帧索引。
-    ///   - andPlay: `true` 表示跳转后继续播放。
+    ///   - startsPlayback: `true` 表示跳转后继续播放。
     /// - Returns: 跳转成功时返回 `true`；尚未加载动画或帧索引无效时返回 `false`。
     @discardableResult
-    func step(toFrame frame: Int, andPlay: Bool) -> Bool {
-        guard let item = videoItem else { return false }
+    func seek(toFrame frame: Int, startsPlayback: Bool) -> Bool {
+        guard let item = videoEntity else { return false }
         guard frame >= 0, frame < item.frames else { return false }
-        if drawLayer == nil { draw() }
-        pauseAnimation()
+        if renderLayer == nil { draw() }
+        pause()
         currentFrame = frame
         update()
-        if andPlay {
+        if startsPlayback {
             guard item.fps > 0 else { return true }
             forwardAnimating = true
             attachDisplayLink(fps: item.fps)
@@ -223,24 +228,24 @@ final class SVGAPlaybackEngine {
     /// 跳转到指定播放进度。
     ///
     /// - Parameters:
-    ///   - percentage: 目标进度。取值会被限制在 `0.0...1.0` 范围内。
-    ///   - andPlay: `true` 表示跳转后继续播放。
+    ///   - progress: 目标进度。取值会被限制在 `0.0...1.0` 范围内。
+    ///   - startsPlayback: `true` 表示跳转后继续播放。
     /// - Returns: 跳转成功时返回 `true`；尚未加载动画时返回 `false`。
     @discardableResult
-    func step(toPercentage percentage: CGFloat, andPlay: Bool) -> Bool {
-        guard let item = videoItem else { return false }
-        let clamped = min(max(percentage, 0), 1)
+    func seek(toProgress progress: CGFloat, startsPlayback: Bool) -> Bool {
+        guard let item = videoEntity else { return false }
+        let clamped = min(max(progress, 0), 1)
         var frame = Int(CGFloat(item.frames) * clamped)
         if frame >= item.frames { frame = item.frames - 1 }
-        return step(toFrame: frame, andPlay: andPlay)
+        return seek(toFrame: frame, startsPlayback: startsPlayback)
     }
 
     /// 清除所有渲染 layer 和当前画面。
     func clear() {
         contentLayers = []
-        drawLayer?.removeFromSuperlayer()
-        drawLayer = nil
-        onDrawLayerChanged?(nil)
+        renderLayer?.removeFromSuperlayer()
+        renderLayer = nil
+        onRenderLayerChanged?(nil)
     }
 
     // MARK: - Layout
@@ -251,7 +256,7 @@ final class SVGAPlaybackEngine {
     ///   - bounds: 宿主视图的内容尺寸。
     ///   - contentMode: 宿主视图的内容缩放模式。
     func resize(bounds: CGSize, contentMode: UIView.ContentMode) {
-        guard let item = videoItem, let dl = drawLayer else { return }
+        guard let item = videoEntity, let dl = renderLayer else { return }
         let vs = item.videoSize
         guard vs.width > 0, vs.height > 0, bounds.width > 0, bounds.height > 0 else { return }
         let videoRatio = vs.width / vs.height
@@ -305,7 +310,7 @@ final class SVGAPlaybackEngine {
     ///   - key: SVGA 文件中的 sprite `imageKey`。
     func setImage(_ image: UIImage, forKey key: String) {
         let key = normalizedDynamicKey(key)
-        dynamicImages[key] = image
+        imageOverrides[key] = image
         for layer in contentLayers(matching: key) {
             layer.setBitmapImage(image)
         }
@@ -316,10 +321,10 @@ final class SVGAPlaybackEngine {
     /// - Parameter key: SVGA 文件中的 sprite `imageKey`。
     func removeImage(forKey key: String) {
         let key = normalizedDynamicKey(key)
-        dynamicImages.removeValue(forKey: key)
+        imageOverrides.removeValue(forKey: key)
         for layer in contentLayers(matching: key) {
             let originalKey = normalizedDynamicKey(layer.imageKey)
-            layer.setBitmapImage(videoItem?.images[originalKey])
+            layer.setBitmapImage(videoEntity?.images[originalKey])
         }
     }
 
@@ -329,7 +334,7 @@ final class SVGAPlaybackEngine {
     ///   - text: 要叠加显示的富文本。
     ///   - key: SVGA 文件中的 sprite `imageKey`。
     func setAttributedText(_ text: NSAttributedString, forKey key: String) {
-        dynamicTexts[key] = text
+        textOverrides[key] = text
         for layer in contentLayers(matching: key) {
             layer.resetTextLayer(text)
         }
@@ -339,8 +344,8 @@ final class SVGAPlaybackEngine {
     ///
     /// - Parameter key: SVGA 文件中的 sprite `imageKey`。
     func removeAttributedText(forKey key: String) {
-        dynamicTexts.removeValue(forKey: key)
-        dynamicTexts.removeValue(forKey: normalizedDynamicKey(key))
+        textOverrides.removeValue(forKey: key)
+        textOverrides.removeValue(forKey: normalizedDynamicKey(key))
         for layer in contentLayers(matching: key) {
             layer.removeTextLayer()
         }
@@ -351,9 +356,9 @@ final class SVGAPlaybackEngine {
     /// - Parameters:
     ///   - block: 自定义绘制回调。传入 `nil` 时移除回调。
     ///   - key: SVGA 文件中的 sprite `imageKey`。
-    func setDrawingBlock(_ block: SVGADynamicDrawingBlock?, forKey key: String) {
+    func setDrawingBlock(_ block: SVGADynamicDrawingHandler?, forKey key: String) {
         let key = normalizedDynamicKey(key)
-        dynamicDrawings[key] = block
+        drawingHandlers[key] = block
         for layer in contentLayers(matching: key) {
             layer.dynamicDrawingBlock = block
         }
@@ -364,7 +369,7 @@ final class SVGAPlaybackEngine {
     /// - Parameter key: SVGA 文件中的 sprite `imageKey`。
     func removeDrawingBlock(forKey key: String) {
         let key = normalizedDynamicKey(key)
-        dynamicDrawings.removeValue(forKey: key)
+        drawingHandlers.removeValue(forKey: key)
         for layer in contentLayers(matching: key) {
             layer.dynamicDrawingBlock = nil
         }
@@ -377,7 +382,7 @@ final class SVGAPlaybackEngine {
     ///   - key: SVGA 文件中的 sprite `imageKey`。
     func setHidden(_ hidden: Bool, forKey key: String) {
         let key = normalizedDynamicKey(key)
-        dynamicHiddens[key] = hidden
+        hiddenOverrides[key] = hidden
         for layer in contentLayers(matching: key) {
             layer.dynamicHidden = hidden
         }
@@ -388,7 +393,7 @@ final class SVGAPlaybackEngine {
     /// - Parameter key: SVGA 文件中的 sprite `imageKey`。
     func removeHidden(forKey key: String) {
         let key = normalizedDynamicKey(key)
-        dynamicHiddens.removeValue(forKey: key)
+        hiddenOverrides.removeValue(forKey: key)
         for layer in contentLayers(matching: key) {
             layer.dynamicHidden = false
         }
@@ -397,14 +402,14 @@ final class SVGAPlaybackEngine {
     /// 清除所有动态内容。
     ///
     /// 包括图片、富文本、绘制回调和隐藏状态。
-    func clearDynamicObjects() {
-        dynamicImages = [:]
-        dynamicTexts = [:]
-        dynamicDrawings = [:]
-        dynamicHiddens = [:]
+    func clearDynamicContent() {
+        imageOverrides = [:]
+        textOverrides = [:]
+        drawingHandlers = [:]
+        hiddenOverrides = [:]
         for layer in contentLayers {
             let originalKey = normalizedDynamicKey(layer.imageKey)
-            layer.setBitmapImage(videoItem?.images[originalKey])
+            layer.setBitmapImage(videoEntity?.images[originalKey])
             layer.removeTextLayer()
             layer.dynamicDrawingBlock = nil
             layer.dynamicHidden = false
@@ -417,8 +422,8 @@ final class SVGAPlaybackEngine {
     ///
     /// 返回值包括根 layer 和每个 sprite 对应的内容 layer。构建时会应用
     /// matte 遮罩和已设置的动态内容。
-    private func buildDrawLayer() -> (CALayer, [SVGAContentLayer])? {
-        guard let item = videoItem else { return nil }
+    private func buildRenderLayer() -> (CALayer, [SVGAContentLayer])? {
+        guard let item = videoEntity else { return nil }
         let dl = CALayer()
         dl.frame = CGRect(origin: .zero, size: item.videoSize)
         dl.masksToBounds = true
@@ -426,7 +431,7 @@ final class SVGAPlaybackEngine {
         var hostLayers: [String: CALayer] = [:]
         for (idx, sprite) in item.sprites.enumerated() {
             let bitmapKey = normalizedDynamicKey(sprite.imageKey)
-            let bitmap = dynamicImages[bitmapKey] ?? item.images[bitmapKey]
+            let bitmap = imageOverrides[bitmapKey] ?? item.images[bitmapKey]
             let contentLayer = sprite.requestLayer(bitmap: bitmap)
             layers.append(contentLayer)
             // Matte 遮罩处理：imageKey 以 ".matte" 结尾的 sprite 作为遮罩层，
@@ -445,13 +450,13 @@ final class SVGAPlaybackEngine {
             } else {
                 dl.addSublayer(contentLayer)
             }
-            if let text = dynamicValue(in: dynamicTexts, for: sprite.imageKey) {
+            if let text = dynamicValue(in: textOverrides, for: sprite.imageKey) {
                 contentLayer.resetTextLayer(text)
             }
-            if let hidden = dynamicValue(in: dynamicHiddens, for: sprite.imageKey) {
+            if let hidden = dynamicValue(in: hiddenOverrides, for: sprite.imageKey) {
                 contentLayer.dynamicHidden = hidden
             }
-            if let block = dynamicValue(in: dynamicDrawings, for: sprite.imageKey) {
+            if let block = dynamicValue(in: drawingHandlers, for: sprite.imageKey) {
                 contentLayer.dynamicDrawingBlock = block
             }
         }
@@ -477,12 +482,12 @@ final class SVGAPlaybackEngine {
 
     /// 构建渲染 layer，并通知宿主视图挂载。
     private func draw() {
-        guard let result = buildDrawLayer() else { return }
+        guard let result = buildRenderLayer() else { return }
         let (dl, layers) = result
         contentLayers = layers
-        drawLayer = dl
-        audioLayers = videoItem?.audios.map { SVGAAudioLayer(audioItem: $0, videoItem: videoItem!) } ?? []
-        onDrawLayerChanged?(dl)
+        renderLayer = dl
+        audioLayers = videoEntity?.audios.map { SVGAAudioLayer(audioItem: $0, videoEntity: videoEntity!) } ?? []
+        onRenderLayerChanged?(dl)
         update()
     }
 
@@ -502,7 +507,7 @@ final class SVGAPlaybackEngine {
     /// 停止 display link，并按需清除画面。
     ///
     /// - Parameter clear: `true` 表示停止后清除渲染 layer。
-    private func stopAnimation(clear: Bool) {
+    private func stop(clear: Bool) {
         forwardAnimating = false
         let link = displayLink
         displayLink = nil
@@ -523,7 +528,7 @@ final class SVGAPlaybackEngine {
     ///
     /// 该方法处理正放、倒放、循环计数和结束填充模式。
     private func nextFrame() {
-        guard let item = videoItem else { return }
+        guard let item = videoEntity else { return }
         if reversing {
             currentFrame -= 1
             if currentFrame < max(0, currentRange.lowerBound) {
@@ -539,13 +544,13 @@ final class SVGAPlaybackEngine {
             }
         }
         if loops > 0, loopCount >= loops {
-            stopAnimation(clear: clearsAfterStop)
+            stop(clear: clearsAfterStop)
             if !clearsAfterStop {
                 switch fillMode {
-                case .backward:
-                    step(toFrame: max(0, currentRange.lowerBound), andPlay: false)
-                case .forward:
-                    step(toFrame: min(item.frames - 1, currentRange.upperBound - 1), andPlay: false)
+                case .firstFrame:
+                    seek(toFrame: max(0, currentRange.lowerBound), startsPlayback: false)
+                case .lastFrame:
+                    seek(toFrame: min(item.frames - 1, currentRange.upperBound - 1), startsPlayback: false)
                 case .clear:
                     clear()
                 }
@@ -556,7 +561,7 @@ final class SVGAPlaybackEngine {
         update()
         let frame = currentFrame
         delegate?.svgaPlaybackEngine(self, didAnimateToFrame: frame)
-        // delegate 回调可能已调用 stopAnimation/startAnimation 改变状态，
+        // delegate 回调可能已调用 stop/start 改变状态，
         // 需检查 displayLink 是否仍有效（即动画未被中断）。
         guard displayLink != nil, item.frames > 0 else { return }
         delegate?.svgaPlaybackEngine(self, didAnimateToPercentage: CGFloat(frame + 1) / CGFloat(item.frames))

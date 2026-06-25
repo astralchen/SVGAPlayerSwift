@@ -74,6 +74,207 @@ func svgaViewPublicAPITypesAreUsable() {
 
 @MainActor
 @Test
+func svgaViewRenamedPublicAPIsAreUsable() {
+    let view = SVGAView()
+    view.autoPlay = false
+    view.resourcePath = " "
+    view.fillMode = .lastFrame
+
+    let remoteURL = URL(string: "https://example.com/effect.svga")!
+    let source = SVGAViewSource.remoteURL(remoteURL)
+
+    view.seek(toFrame: 0, startsPlayback: false)
+    view.seek(toProgress: 0.5, startsPlayback: false)
+
+    #expect(view.resourcePath == " ")
+    #expect(source.debugDescription.contains("remoteURL"))
+}
+
+@MainActor
+@Test
+func svgaViewCanInitializeWithResourcePath() {
+    let view = SVGAView(resourcePath: " ")
+
+    #expect(view.resourcePath == " ")
+    #expect(view.state == .idle)
+}
+
+@MainActor
+@Test
+func svgaViewOptimizedPublicAPIsAreUsable() async throws {
+    guard let fileURL = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
+        throw SVGAParserError.resourceNotFound("banner.svga")
+    }
+    let remoteURL = URL(string: "https://example.com/effect.svga")!
+
+    _ = SVGAView(named: "banner", in: .module)
+    _ = SVGAView(fileURL: fileURL)
+    _ = SVGAView(remoteURL: remoteURL)
+
+    let view = SVGAView()
+    var configuredContent = false
+    try await view.load(.named("banner", bundle: .module), startsPlayback: false) { content in
+        configuredContent = true
+        content.setHidden(true, forKey: "badge")
+    }
+
+    view.start()
+    view.pause()
+    view.start(range: 0..<1, reverse: false)
+    view.stop()
+
+    #expect(configuredContent)
+    #expect(view.state == .stopped)
+}
+
+@MainActor
+@Test
+func loadSourceCanStartPlaybackExplicitly() async throws {
+    let view = SVGAView()
+
+    try await view.load(.named("banner", bundle: .module), startsPlayback: true)
+
+    #expect(view.state == .playing)
+}
+
+@MainActor
+@Test
+func playAlwaysStartsPlaybackEvenWhenAutoPlayIsDisabled() async throws {
+    let view = SVGAView()
+    view.autoPlay = false
+
+    view.play(.named("banner", bundle: .module))
+
+    for _ in 0..<200 where view.state != .playing {
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    #expect(view.state == .playing)
+}
+
+@MainActor
+@Test
+func preloadRequestCachesRemoteDataWithoutAView() async throws {
+    guard let url = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
+        throw SVGAParserError.resourceNotFound("banner.svga")
+    }
+    ChunkedSVGAURLProtocol.responseData = try Data(contentsOf: url)
+    SVGAURLSessionTestHooks.protocolClasses = [
+        ChunkedSVGAURLProtocol.self,
+        NeverFinishingSVGAURLProtocol.self
+    ]
+    let preloadURL = URL(string: "https://svga-progress.test/preload-\(UUID().uuidString).svga")!
+    ChunkedSVGAURLProtocol.resetRequestCount(for: preloadURL)
+    let request = URLRequest(
+        url: preloadURL,
+        cachePolicy: .reloadIgnoringLocalCacheData,
+        timeoutInterval: 5
+    )
+    let recorder = ProgressRecorder()
+
+    try await SVGAView.preload(.request(request)) { progress in
+        recorder.record(progress)
+    }
+
+    let view = SVGAView()
+    try await view.load(.request(request))
+
+    let values = recorder.values
+    #expect(ChunkedSVGAURLProtocol.requestCount(for: preloadURL) == 1)
+    #expect(view.state == .ready)
+    #expect(values.contains { $0 > 0 && $0 < 1 }, "expected an intermediate progress value, got \(values)")
+    #expect(values.last == 1.0, "expected final progress to be 1.0, got \(values)")
+}
+
+@MainActor
+@Test
+func concurrentPreloadAndViewLoadShareInFlightRequest() async throws {
+    guard let url = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
+        throw SVGAParserError.resourceNotFound("banner.svga")
+    }
+    ChunkedSVGAURLProtocol.responseData = try Data(contentsOf: url)
+    SVGAURLSessionTestHooks.protocolClasses = [
+        ChunkedSVGAURLProtocol.self,
+        NeverFinishingSVGAURLProtocol.self
+    ]
+    let preloadURL = URL(string: "https://svga-progress.test/single-flight-\(UUID().uuidString).svga")!
+    ChunkedSVGAURLProtocol.resetRequestCount(for: preloadURL)
+    ChunkedSVGAURLProtocol.setResponseDelay(0.25, for: preloadURL)
+    let request = URLRequest(
+        url: preloadURL,
+        cachePolicy: .reloadIgnoringLocalCacheData,
+        timeoutInterval: 5
+    )
+    let preloadTask = Task.detached {
+        try await SVGAView.preload(.request(request))
+    }
+
+    for _ in 0..<1_000 where ChunkedSVGAURLProtocol.requestCount(for: preloadURL) == 0 {
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    #expect(ChunkedSVGAURLProtocol.requestCount(for: preloadURL) == 1)
+
+    let view = SVGAView()
+    try await view.load(.request(request))
+    try await preloadTask.value
+
+    #expect(ChunkedSVGAURLProtocol.requestCount(for: preloadURL) == 1)
+    #expect(view.state == .ready)
+}
+
+@MainActor
+@Test
+func resourcePathInitializerUsesLoadedVideoSizeWhenFrameIsZero() async throws {
+    let entity = try await SVGAParser.shared.parse(named: "banner", in: .module)
+    guard let fileURL = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
+        throw SVGAParserError.resourceNotFound("banner.svga")
+    }
+
+    let view = SVGAView(resourcePath: fileURL.absoluteString)
+
+    for _ in 0..<200 where view.intrinsicContentSize != entity.videoSize {
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    #expect(view.frame.size == entity.videoSize)
+}
+
+@MainActor
+@Test
+func localSourceInitializersUseLoadedVideoSizeWhenFrameIsZero() async throws {
+    let entity = try await SVGAParser.shared.parse(named: "banner", in: .module)
+    guard let fileURL = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
+        throw SVGAParserError.resourceNotFound("banner.svga")
+    }
+
+    let namedView = SVGAView(named: "banner", in: .module)
+    let fileView = SVGAView(fileURL: fileURL)
+
+    for _ in 0..<200 where namedView.frame.size != entity.videoSize || fileView.frame.size != entity.videoSize {
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    #expect(namedView.frame.size == entity.videoSize)
+    #expect(fileView.frame.size == entity.videoSize)
+}
+
+@MainActor
+@Test
+func svgaViewIntrinsicContentSizeMatchesLoadedVideoSize() async throws {
+    let entity = try await SVGAParser.shared.parse(named: "banner", in: .module)
+    let view = SVGAView()
+    view.autoPlay = false
+
+    #expect(view.intrinsicContentSize == UIImageView().intrinsicContentSize)
+
+    try await view.load(named: "banner", in: .module)
+
+    #expect(view.intrinsicContentSize == entity.videoSize)
+    #expect(view.sizeThatFits(CGSize(width: 1, height: 1)) == entity.videoSize)
+}
+
+@MainActor
+@Test
 func loadNamedAwaitsReadyState() async throws {
     let view = SVGAView()
     view.autoPlay = false
@@ -92,14 +293,14 @@ func loadNamedAwaitsReadyState() async throws {
 
 @MainActor
 @Test
-func filePathLoadingIsDeferredUntilAfterPropertySet() async throws {
+func resourcePathLoadingIsDeferredUntilAfterPropertySet() async throws {
     guard let fileURL = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
         throw SVGAParserError.resourceNotFound("banner.svga")
     }
     let view = SVGAView()
     view.autoPlay = false
 
-    view.filePath = fileURL.absoluteString
+    view.resourcePath = fileURL.absoluteString
 
     #expect(view.state == .idle)
     for _ in 0..<200 where view.state != .ready {
@@ -116,19 +317,19 @@ func playbackControlsUpdateState() async throws {
 
     try await view.load(named: "banner", in: .module)
 
-    view.startAnimation()
+    view.start()
     #expect(view.state == .playing)
 
-    view.pauseAnimation()
+    view.pause()
     #expect(view.state == .paused)
 
-    view.step(toFrame: 0, andPlay: false)
+    view.seek(toFrame: 0, startsPlayback: false)
     #expect(view.state == .paused)
 
-    view.step(toPercentage: 0.2, andPlay: true)
+    view.seek(toProgress: 0.2, startsPlayback: true)
     #expect(view.state == .playing)
 
-    view.stopAnimation()
+    view.stop()
     #expect(view.state == .stopped)
 }
 
@@ -146,7 +347,7 @@ func finishedAnimationUpdatesStateBeforeCallback() async throws {
     }
 
     try await view.load(named: "banner", in: .module)
-    view.startAnimation(range: 0..<1, reverse: false)
+    view.start(range: 0..<1, reverse: false)
     try await Task.sleep(nanoseconds: 200_000_000)
 
     #expect(callbackState == .stopped)
@@ -169,8 +370,8 @@ func runtimeDynamicContentMethodsUpdateLoadedLayers() async throws {
     }
 
     let player = SVGAPlaybackEngine()
-    player.videoItem = entity
-    guard let contentLayer = findContentLayer(in: player.drawLayer, imageKey: sprite.imageKey) else {
+    player.videoEntity = entity
+    guard let contentLayer = findContentLayer(in: player.renderLayer, imageKey: sprite.imageKey) else {
         throw SVGAParserError.resourceNotFound("content layer")
     }
 
@@ -203,7 +404,7 @@ func runtimeDynamicContentMethodsUpdateLoadedLayers() async throws {
     player.setAttributedText(NSAttributedString(string: "clear"), forKey: sprite.imageKey)
     player.setDrawingBlock({ _, _ in }, forKey: sprite.imageKey)
     player.setHidden(true, forKey: sprite.imageKey)
-    player.clearDynamicObjects()
+    player.clearDynamicContent()
 
     #expect(layerContentsIdentical(contentLayer.bitmapLayer?.contents, to: originalCGImage))
     #expect(contentLayer.textLayer == nil)
@@ -221,8 +422,13 @@ func playRejectsFileURLThroughRemoteURLAPI() async throws {
         failedError = error
     }
 
-    view.play(url: URL(fileURLWithPath: "/tmp/effect.svga"))
-    try await Task.sleep(nanoseconds: 50_000_000)
+    view.play(remoteURL: URL(fileURLWithPath: "/tmp/effect.svga"))
+    for _ in 0..<200 {
+        if case .failed = view.state {
+            break
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
 
     #expect(view.state == .failed(.unsupportedURLScheme("file")))
     #expect(failedError == .unsupportedURLScheme("file"))
@@ -255,7 +461,7 @@ func clearCancelsPendingLoad() async throws {
 
 @MainActor
 @Test
-func stopAnimationCancelsPendingLoad() async throws {
+func stopCancelsPendingLoad() async throws {
     SVGAURLSessionTestHooks.protocolClasses = [
         ChunkedSVGAURLProtocol.self,
         NeverFinishingSVGAURLProtocol.self
@@ -270,7 +476,7 @@ func stopAnimationCancelsPendingLoad() async throws {
 
     view.play(request: request)
     try await Task.sleep(nanoseconds: 50_000_000)
-    view.stopAnimation()
+    view.stop()
 
     #expect(view.state == .idle)
 }

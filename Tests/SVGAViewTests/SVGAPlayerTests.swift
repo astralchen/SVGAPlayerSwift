@@ -14,7 +14,7 @@ private func loadEntity(named name: String) async throws -> SVGA.VideoEntity {
     return try await SVGAParser.shared.parse(data: data, cacheKey: "test_\(name)_\(data.count)")
 }
 
-private final class ProgressRecorder: @unchecked Sendable {
+final class ProgressRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedValues: [Double] = []
 
@@ -33,7 +33,42 @@ private final class ProgressRecorder: @unchecked Sendable {
 
 final class ChunkedSVGAURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var responseData = Data()
+    nonisolated(unsafe) static var requestCount = 0
+    private static let requestLock = NSLock()
+    nonisolated(unsafe) private static var requestCountsByURL: [URL: Int] = [:]
+    nonisolated(unsafe) private static var responseDelaysByURL: [URL: TimeInterval] = [:]
     private var isStopped = false
+
+    static func resetRequestCounts() {
+        requestLock.lock()
+        requestCount = 0
+        requestCountsByURL.removeAll()
+        requestLock.unlock()
+    }
+
+    static func resetRequestCount(for url: URL) {
+        requestLock.lock()
+        requestCountsByURL[url] = 0
+        requestLock.unlock()
+    }
+
+    static func requestCount(for url: URL) -> Int {
+        requestLock.lock()
+        defer { requestLock.unlock() }
+        return requestCountsByURL[url, default: 0]
+    }
+
+    static func setResponseDelay(_ delay: TimeInterval, for url: URL) {
+        requestLock.lock()
+        responseDelaysByURL[url] = delay
+        requestLock.unlock()
+    }
+
+    static func responseDelay(for url: URL) -> TimeInterval {
+        requestLock.lock()
+        defer { requestLock.unlock() }
+        return responseDelaysByURL[url, default: 0.05]
+    }
 
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host == "svga-progress.test"
@@ -48,6 +83,10 @@ final class ChunkedSVGAURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: SVGAParserError.invalidURL)
             return
         }
+        Self.requestLock.lock()
+        Self.requestCount += 1
+        Self.requestCountsByURL[url, default: 0] += 1
+        Self.requestLock.unlock()
         let data = Self.responseData
         let response = HTTPURLResponse(
             url: url,
@@ -59,7 +98,8 @@ final class ChunkedSVGAURLProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         let splitIndex = data.count / 2
         client?.urlProtocol(self, didLoad: Data(data.prefix(splitIndex)))
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { [weak self] in
+        let responseDelay = Self.responseDelay(for: url)
+        DispatchQueue.global().asyncAfter(deadline: .now() + responseDelay) { [weak self] in
             guard let self, !self.isStopped else { return }
             self.client?.urlProtocol(self, didLoad: Data(data.suffix(data.count - splitIndex)))
             self.client?.urlProtocolDidFinishLoading(self)

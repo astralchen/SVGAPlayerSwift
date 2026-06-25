@@ -33,6 +33,9 @@ view.addSubview(playerView)
 
 // Play from bundle
 playerView.play(named: "animation")
+
+// Or create and load directly
+let bannerView = SVGAView(named: "banner")
 ```
 
 ## Usage
@@ -44,13 +47,51 @@ playerView.play(named: "banner")
 
 // From a specific bundle
 playerView.play(named: "effect", in: frameworkBundle)
+
+// Initializer form
+let playerView = SVGAView(named: "banner", in: frameworkBundle)
 ```
 
 ### Play from URL
 
 ```swift
 let url = URL(string: "https://cdn.example.com/animation.svga")!
-playerView.play(url: url)
+playerView.play(remoteURL: url)
+
+let playerView = SVGAView(remoteURL: url)
+```
+
+### Unified Sources
+
+```swift
+let source = SVGAViewSource.request(URLRequest(url: url))
+playerView.play(source)
+
+try await playerView.load(source, startsPlayback: false)
+```
+
+### Preload Without a View
+
+Use `preload(...)` to download, decompress, parse, and cache an SVGA before a player view exists:
+
+```swift
+try await SVGAView.preload(remoteURL: url) { progress in
+    print("preload progress:", progress)
+}
+
+// Later, this reuses the cached entity for the same URL.
+playerView.play(remoteURL: url)
+```
+
+Concurrent `preload` and `load`/`play` calls for the same URL share the same in-flight request.
+
+All sources are supported:
+
+```swift
+try await SVGAView.preload(named: "banner")
+try await SVGAView.preload(request: URLRequest(url: url))
+try await SVGAView.preload(fileURL: localFileURL)
+try await SVGAView.preload(data: svgaData, cacheKey: "gift-v1")
 ```
 
 ### Load Without Auto-Play
@@ -59,19 +100,18 @@ Use `load(...)` when you need to await readiness before starting playback:
 
 ```swift
 try await playerView.load(named: "banner")
-playerView.startAnimation()
+playerView.start()
 
-try await playerView.load(url: url)
+try await playerView.load(remoteURL: url)
 try await playerView.load(request: URLRequest(url: url))
 try await playerView.load(fileURL: localFileURL)
 try await playerView.load(data: svgaData, cacheKey: "gift-v1")
 ```
 
-You can also route through `SVGAViewSource` when the source is selected dynamically:
+You can start playback explicitly from the load call:
 
 ```swift
-let source = SVGAViewSource.request(URLRequest(url: url))
-try await playerView.load(source: source)
+try await playerView.load(.named("banner"), startsPlayback: true)
 ```
 
 ### Additional Play Sources
@@ -85,18 +125,18 @@ playerView.play(data: svgaData, cacheKey: "gift-v1")
 ### Playback Control
 
 ```swift
-playerView.startAnimation()
-playerView.pauseAnimation()
-playerView.stopAnimation()
+playerView.start()
+playerView.pause()
+playerView.stop()
 
 // Play specific frame range
-playerView.startAnimation(range: 10..<30, reverse: false)
+playerView.start(range: 10..<30, reverse: false)
 
 // Jump to a frame
-playerView.step(toFrame: 5, andPlay: false)
+playerView.seek(toFrame: 5, startsPlayback: false)
 
 // Jump to percentage
-playerView.step(toPercentage: 0.5, andPlay: true)
+playerView.seek(toProgress: 0.5, startsPlayback: true)
 ```
 
 ### Dynamic Content
@@ -113,6 +153,20 @@ content.setDrawingBlock({ layer, frame in
 }, forKey: "effect")
 
 playerView.play(named: "gift", dynamicContent: content)
+```
+
+Or configure dynamic content inline:
+
+```swift
+playerView.play(named: "gift") { content in
+    content.setImage(avatarImage, forKey: "avatar")
+    content.setAttributedText(nicknameText, forKey: "username")
+    content.setHidden(true, forKey: "badge")
+}
+
+try await playerView.load(.named("gift"), startsPlayback: false) { content in
+    content.setHidden(true, forKey: "badge")
+}
 ```
 
 Update dynamic content after the SVGA has loaded:
@@ -166,7 +220,7 @@ playerView.onEvent = { event in
 ```swift
 playerView.cancelLoading()
 playerView.clear()         // also cancels an in-flight load
-playerView.stopAnimation() // cancels an in-flight load, or stops playback
+playerView.stop()          // cancels an in-flight load, or stops playback
 ```
 
 Starting a new load cancels the previous pending load. Stale completions are ignored.
@@ -176,18 +230,18 @@ Starting a new load cancels the previous pending load. Stale completions are ign
 ```swift
 playerView.loops = 3              // Play 3 times (0 = infinite, default)
 playerView.clearsAfterStop = true // Clear canvas after stop (default true)
-playerView.fillMode = .forward    // Stay on last frame after finish
-playerView.autoPlay = true        // Auto-play after loading (default true)
+playerView.fillMode = .lastFrame  // Stay on last frame after finish
+playerView.autoPlay = true        // Auto-play resourcePath loads (default true)
 ```
 
 ### Interface Builder
 
 Set the custom class to `SVGAView` in Interface Builder, then configure:
 
-- **filePath** — Bundle resource name, HTTP(S) URL, file URL, or absolute local path
+- **resourcePath** — Bundle resource name, HTTP(S) URL, file URL, or absolute local path
 - **autoPlay** — Auto-play on load
 
-`filePath` loading is deferred until the view has finished initialization.
+`resourcePath` loading is deferred until the view has finished initialization.
 
 ## Architecture
 

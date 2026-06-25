@@ -1,5 +1,5 @@
 {
-  "originHash" : "d1b68f5ae36c13cfc87fa49be111515adbdaafe2a1ce0bf4da50cf765dcda5b4",
+  "originHash" : "bb96cabb33577c66f8e74cf872a2ec9ad30870e60c4f2f86bad85dbf680aacf0",
   "pins" : [
     {
       "identity" : "swift-protobuf",

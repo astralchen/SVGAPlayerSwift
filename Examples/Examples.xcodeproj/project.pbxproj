@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		772287882FED0C7F000349CA /* SVGAView in Frameworks */ = {isa = PBXBuildFile; productRef = 772287872FED0C7F000349CA /* SVGAView */; };
 		772C39CC2F714A6300A6B0D0 /* SVGAView in Frameworks */ = {isa = PBXBuildFile; productRef = 772C39CB2F714A6300A6B0D0 /* SVGAView */; };
 /* End PBXBuildFile section */
 
@@ -69,6 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				772287882FED0C7F000349CA /* SVGAView in Frameworks */,
 				772C39CC2F714A6300A6B0D0 /* SVGAView in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -131,6 +133,7 @@
 			name = Examples;
 			packageProductDependencies = (
 				772C39CB2F714A6300A6B0D0 /* SVGAView */,
+				772287872FED0C7F000349CA /* SVGAView */,
 			);
 			productName = Examples;
 			productReference = 772C39962F714A1800A6B0D0 /* Examples.app */;
@@ -215,7 +218,7 @@
 			mainGroup = 772C398D2F714A1800A6B0D0;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				772C39CA2F714A6300A6B0D0 /* XCLocalSwiftPackageReference "../../SVGAPlayerSwift" */,
+				772287862FED0C7F000349CA /* XCLocalSwiftPackageReference "../../SVGAPlayerSwift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 772C39972F714A1800A6B0D0 /* Products */;
@@ -298,7 +301,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = R75LFWU52W;
+				DEVELOPMENT_TEAM = MP8ZV9A8HZ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Examples/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -331,7 +334,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = R75LFWU52W;
+				DEVELOPMENT_TEAM = MP8ZV9A8HZ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Examples/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -600,13 +603,17 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		772C39CA2F714A6300A6B0D0 /* XCLocalSwiftPackageReference "../../SVGAPlayerSwift" */ = {
+		772287862FED0C7F000349CA /* XCLocalSwiftPackageReference "../../SVGAPlayerSwift" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../SVGAPlayerSwift;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		772287872FED0C7F000349CA /* SVGAView */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SVGAView;
+		};
 		772C39CB2F714A6300A6B0D0 /* SVGAView */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SVGAView;

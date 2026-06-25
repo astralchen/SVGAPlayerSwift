@@ -66,7 +66,7 @@ class ViewController: UIViewController {
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        playerView.stopAnimation()
+        playerView.stop()
     }
 }
 
@@ -332,7 +332,7 @@ private extension ViewController {
         showState("准备下载...", state: .loading)
         showDownloadProgress(0)
         playerView.clear()
-        playerView.play(url: effect.url)
+        playerView.play(remoteURL: effect.url)
     }
 
     @objc func replaySelectedGift() {
@@ -344,9 +344,9 @@ private extension ViewController {
         guard selectedEffect != nil else { return }
 
         if isPaused {
-            playerView.startAnimation()
+            playerView.start()
         } else {
-            playerView.pauseAnimation()
+            playerView.pause()
         }
 
         isPaused.toggle()

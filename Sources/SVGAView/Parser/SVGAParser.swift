@@ -2,10 +2,7 @@ import UIKit
 import SwiftProtobuf
 import CryptoKit
 
-/// SVGA 网络下载进度回调。
-///
-/// 回调参数位于 `0.0...1.0` 范围内。
-typealias SVGADownloadProgressHandler = @Sendable (_ progress: Double) -> Void
+typealias SVGADownloadProgressHandler = SVGAViewPreloadProgressHandler
 
 /// 解析 SVGA 文件的 actor。
 ///
@@ -30,6 +27,18 @@ actor SVGAParser {
     /// 下载数据超过该值时会抛出 `SVGAParserError.fileTooLarge`。
     /// 默认值为 50 MB。
     var maxDownloadSize: Int = 50_000_000
+
+    private struct InFlightParse {
+        let task: Task<SVGA.VideoEntity, Error>
+        var waiterIDs: Set<UUID>
+    }
+
+    private struct InFlightWaiter {
+        let id: UUID
+        let task: Task<SVGA.VideoEntity, Error>
+    }
+
+    private var inFlightParses: [String: InFlightParse] = [:]
 
     // MARK: - Public API
 
@@ -57,6 +66,10 @@ actor SVGAParser {
             throw SVGAParserError.invalidURL
         }
         let key = cacheKey(for: url)
+        if let cached = await SVGACacheStore.shared.read(key: key) {
+            progressHandler?(1.0)
+            return cached
+        }
         let cacheDir = cacheDirURL(for: key)
         if FileManager.default.fileExists(atPath: cacheDir.path) {
             if let entity = try? await loadFromDisk(cacheDir: cacheDir, cacheKey: key) {
@@ -65,12 +78,25 @@ actor SVGAParser {
             }
             try? FileManager.default.removeItem(at: cacheDir)
         }
-        let data = try await SVGADataDownloader.download(
-            request: request,
-            maximumSize: maxDownloadSize,
-            progressHandler: progressHandler
-        )
-        return try await parse(data: data, cacheKey: key)
+        if let waiter = addWaiterToInFlightParse(cacheKey: key) {
+            return try await awaitInFlightParse(
+                waiter,
+                cacheKey: key,
+                progressHandler: progressHandler
+            )
+        }
+
+        let maximumSize = maxDownloadSize
+        let task = Task { [request, key, maximumSize, progressHandler] in
+            let data = try await SVGADataDownloader.download(
+                request: request,
+                maximumSize: maximumSize,
+                progressHandler: progressHandler
+            )
+            return try await self.parseData(data, cacheKey: key)
+        }
+        let waiter = storeInFlightParse(task, cacheKey: key)
+        return try await awaitInFlightParse(waiter, cacheKey: key, progressHandler: nil)
     }
 
     /// 从原始数据解析 SVGA 文件。
@@ -83,6 +109,10 @@ actor SVGAParser {
     /// - Returns: 解析后的动画实体。
     /// - Throws: 解压或解析失败时抛出错误。
     func parse(data: Data, cacheKey key: String) async throws -> SVGA.VideoEntity {
+        try await parseData(data, cacheKey: key)
+    }
+
+    private func parseData(_ data: Data, cacheKey key: String) async throws -> SVGA.VideoEntity {
         if let cached = await SVGACacheStore.shared.read(key: key) {
             return cached
         }
@@ -97,6 +127,8 @@ actor SVGAParser {
             entity = try await loadFromDisk(cacheDir: cacheDir, cacheKey: key)
         } else {
             let inflated = try SVGADecompressor.inflate(data)
+            try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            try inflated.write(to: cacheDir.appendingPathComponent("movie.binary"), options: .atomic)
             entity = try parseProto(data: inflated, cacheDir: cacheDir.path, cacheKey: key)
         }
         await cacheEntity(entity, key: key)
@@ -167,6 +199,57 @@ actor SVGAParser {
             await SVGACacheStore.shared.save(key: key, entity: entity)
         } else {
             await SVGACacheStore.shared.saveWeak(key: key, entity: entity)
+        }
+    }
+
+    private func addWaiterToInFlightParse(cacheKey key: String) -> InFlightWaiter? {
+        guard var inFlight = inFlightParses[key] else { return nil }
+        let waiterID = UUID()
+        inFlight.waiterIDs.insert(waiterID)
+        inFlightParses[key] = inFlight
+        return InFlightWaiter(id: waiterID, task: inFlight.task)
+    }
+
+    private func storeInFlightParse(
+        _ task: Task<SVGA.VideoEntity, Error>,
+        cacheKey key: String
+    ) -> InFlightWaiter {
+        let waiterID = UUID()
+        inFlightParses[key] = InFlightParse(task: task, waiterIDs: [waiterID])
+        return InFlightWaiter(id: waiterID, task: task)
+    }
+
+    private func awaitInFlightParse(
+        _ waiter: InFlightWaiter,
+        cacheKey key: String,
+        progressHandler: SVGADownloadProgressHandler?
+    ) async throws -> SVGA.VideoEntity {
+        defer {
+            releaseInFlightParseWaiter(cacheKey: key, waiterID: waiter.id)
+        }
+        let entity = try await withTaskCancellationHandler {
+            let entity = try await waiter.task.value
+            try Task.checkCancellation()
+            progressHandler?(1.0)
+            return entity
+        } onCancel: {
+            Task {
+                await self.releaseInFlightParseWaiter(cacheKey: key, waiterID: waiter.id)
+            }
+        }
+        return entity
+    }
+
+    private func releaseInFlightParseWaiter(cacheKey key: String, waiterID: UUID) {
+        guard var inFlight = inFlightParses[key],
+              inFlight.waiterIDs.remove(waiterID) != nil
+        else { return }
+
+        if inFlight.waiterIDs.isEmpty {
+            inFlight.task.cancel()
+            inFlightParses[key] = nil
+        } else {
+            inFlightParses[key] = inFlight
         }
     }
 
