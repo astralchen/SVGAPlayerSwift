@@ -175,7 +175,61 @@ actor SVGAParser {
         return try await parse(data: data, cacheKey: key)
     }
 
+    /// 查询远程 URL 对应的缓存状态。
+    func cacheStatus(url: URL) async -> SVGACacheStatus {
+        await cacheStatus(cacheKey: cacheKey(for: url))
+    }
+
+    /// 查询自定义请求对应的远程 URL 缓存状态。
+    func cacheStatus(request: URLRequest) async -> SVGACacheStatus {
+        guard let url = request.url else { return .missing }
+        return await cacheStatus(url: url)
+    }
+
+    /// 查询 bundle 中资源的缓存状态。
+    func cacheStatus(named: String, in bundle: Bundle? = nil) async -> SVGACacheStatus {
+        let b = bundle ?? Bundle.main
+        guard let fileURL = b.url(forResource: named, withExtension: "svga")
+               ?? b.url(forResource: named, withExtension: nil),
+              let data = try? Data(contentsOf: fileURL) else {
+            return .missing
+        }
+        return await cacheStatus(cacheKey: sha256(data))
+    }
+
+    /// 查询本地文件 URL 的缓存状态。
+    func cacheStatus(fileURL: URL) async -> SVGACacheStatus {
+        guard fileURL.isFileURL,
+              let data = try? Data(contentsOf: fileURL) else {
+            return .missing
+        }
+        return await cacheStatus(cacheKey: sha256(data))
+    }
+
+    /// 查询调用方指定的 data cache key 缓存状态。
+    func cacheStatus(dataCacheKey key: String) async -> SVGACacheStatus {
+        await cacheStatus(cacheKey: key)
+    }
+
     // MARK: - Private helpers
+
+    private func cacheStatus(cacheKey key: String) async -> SVGACacheStatus {
+        let cacheDir = cacheDirURL(for: key)
+        if await SVGACacheStore.shared.read(key: key) != nil || hasDiskCache(cacheDir: cacheDir) {
+            return .cached(localPath: cacheDir.path)
+        }
+        if let inFlight = inFlightParses[key] {
+            return .downloading(progress: inFlight.lastProgress)
+        }
+        return .missing
+    }
+
+    private func hasDiskCache(cacheDir: URL) -> Bool {
+        let binaryPath = cacheDir.appendingPathComponent("movie.binary").path
+        let specPath = cacheDir.appendingPathComponent("movie.spec").path
+        return FileManager.default.fileExists(atPath: binaryPath)
+            || FileManager.default.fileExists(atPath: specPath)
+    }
 
     private func loadFromDisk(cacheDir: URL, cacheKey key: String) async throws -> SVGA.VideoEntity {
         let binaryPath = cacheDir.appendingPathComponent("movie.binary").path

@@ -188,6 +188,45 @@ func preloadRequestCachesRemoteDataWithoutAView() async throws {
 
 @MainActor
 @Test
+func remoteCacheStatusCanBeQueriedWithoutLoadingAView() async throws {
+    guard let url = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
+        throw SVGAParserError.resourceNotFound("banner.svga")
+    }
+    ChunkedSVGAURLProtocol.responseData = try Data(contentsOf: url)
+    SVGAURLSessionTestHooks.protocolClasses = [
+        ChunkedSVGAURLProtocol.self,
+        NeverFinishingSVGAURLProtocol.self
+    ]
+    let preloadURL = URL(string: "https://svga-progress.test/cache-state-\(UUID().uuidString).svga")!
+    ChunkedSVGAURLProtocol.resetRequestCount(for: preloadURL)
+    let request = URLRequest(
+        url: preloadURL,
+        cachePolicy: .reloadIgnoringLocalCacheData,
+        timeoutInterval: 5
+    )
+
+    #expect(await SVGAView.cacheStatus(remoteURL: preloadURL) == .missing)
+    #expect(await SVGAView.cacheStatus(request: request) == .missing)
+
+    try await SVGAView.preload(request: request)
+
+    let remoteStatus = await SVGAView.cacheStatus(remoteURL: preloadURL)
+    let requestStatus = await SVGAView.cacheStatus(request: request)
+    guard case .cached(let remotePath) = remoteStatus else {
+        Issue.record("Expected cached remote status, got \(remoteStatus)")
+        return
+    }
+    guard case .cached(let requestPath) = requestStatus else {
+        Issue.record("Expected cached request status, got \(requestStatus)")
+        return
+    }
+    #expect(remotePath == requestPath)
+    #expect(FileManager.default.fileExists(atPath: remotePath))
+    #expect(ChunkedSVGAURLProtocol.requestCount(for: preloadURL) == 1)
+}
+
+@MainActor
+@Test
 func concurrentPreloadAndViewLoadShareInFlightRequest() async throws {
     guard let url = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
         throw SVGAParserError.resourceNotFound("banner.svga")
@@ -199,7 +238,7 @@ func concurrentPreloadAndViewLoadShareInFlightRequest() async throws {
     ]
     let preloadURL = URL(string: "https://svga-progress.test/single-flight-\(UUID().uuidString).svga")!
     ChunkedSVGAURLProtocol.resetRequestCount(for: preloadURL)
-    ChunkedSVGAURLProtocol.setResponseDelay(0.25, for: preloadURL)
+    ChunkedSVGAURLProtocol.setResponseDelay(1.0, for: preloadURL)
     let request = URLRequest(
         url: preloadURL,
         cachePolicy: .reloadIgnoringLocalCacheData,
@@ -213,6 +252,14 @@ func concurrentPreloadAndViewLoadShareInFlightRequest() async throws {
         try await Task.sleep(nanoseconds: 1_000_000)
     }
     #expect(ChunkedSVGAURLProtocol.requestCount(for: preloadURL) == 1)
+    let status = await SVGAView.cacheStatus(request: request)
+    if case .downloading(let progress) = status {
+        if let progress {
+            #expect(progress >= 0.0 && progress <= 1.0)
+        }
+    } else {
+        Issue.record("Expected downloading status, got \(status)")
+    }
 
     let view = SVGAView()
     try await view.load(.request(request))
@@ -235,7 +282,7 @@ func concurrentPreloadAndViewLoadBothReceiveInFlightProgress() async throws {
     ]
     let preloadURL = URL(string: "https://svga-progress.test/in-flight-progress-\(UUID().uuidString).svga")!
     ChunkedSVGAURLProtocol.resetRequestCount(for: preloadURL)
-    ChunkedSVGAURLProtocol.setResponseDelay(0.25, for: preloadURL)
+    ChunkedSVGAURLProtocol.setResponseDelay(1.0, for: preloadURL)
     let request = URLRequest(
         url: preloadURL,
         cachePolicy: .reloadIgnoringLocalCacheData,
@@ -253,6 +300,12 @@ func concurrentPreloadAndViewLoadBothReceiveInFlightProgress() async throws {
         try await Task.sleep(nanoseconds: 1_000_000)
     }
     #expect(preloadRecorder.values.contains { $0 > 0 && $0 < 1 })
+    let status = await SVGAView.cacheStatus(request: request)
+    if case .downloading(let progress?) = status {
+        #expect(progress > 0.0 && progress < 1.0)
+    } else {
+        Issue.record("Expected downloading status with progress, got \(status)")
+    }
 
     let view = SVGAView()
     view.onEvent = { event in

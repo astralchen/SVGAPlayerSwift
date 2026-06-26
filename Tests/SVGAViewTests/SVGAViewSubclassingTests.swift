@@ -52,14 +52,25 @@ func svgaViewPreloadPublicAPIsAreUsableWithoutAView() async throws {
         throw NSError(domain: "SVGAViewSubclassingTests", code: 1)
     }
     let data = try Data(contentsOf: fileURL)
+    let cacheKey = "public-preload-\(data.count)"
     let progressHandler: SVGAViewPreloadProgressHandler = { _ in }
 
     try await SVGAView.preload(.named("banner", bundle: .module))
     try await SVGAView.preload(named: "banner", in: .module)
     try await SVGAView.preload(fileURL: fileURL)
-    try await SVGAView.preload(data: data, cacheKey: "public-preload-\(data.count)")
+    try await SVGAView.preload(data: data, cacheKey: cacheKey)
+
+    let cacheStatus: SVGACacheStatus = .missing
+    #expect(cacheStatus == .missing)
+    #expect(await SVGAView.cacheStatus(.named("banner", bundle: .module)) != .missing)
+    #expect(await SVGAView.cacheStatus(named: "banner", in: .module) != .missing)
+    #expect(await SVGAView.cacheStatus(fileURL: fileURL) != .missing)
+    #expect(await SVGAView.cacheStatus(data: data, cacheKey: cacheKey) != .missing)
+    #expect(await SVGAView.cacheStatus(dataCacheKey: cacheKey) != .missing)
 
     _ = progressHandler
     _ = SVGAView.preload(remoteURL:progressHandler:)
     _ = SVGAView.preload(request:progressHandler:)
+    _ = SVGAView.cacheStatus(remoteURL:)
+    _ = SVGAView.cacheStatus(request:)
 }

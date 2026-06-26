@@ -203,6 +203,16 @@ public enum SVGAViewSource: CustomDebugStringConvertible, Sendable {
     }
 }
 
+/// 指定来源的 SVGA 缓存状态。
+public enum SVGACacheStatus: Equatable, Sendable {
+    /// 已有可复用的本地缓存。
+    case cached(localPath: String)
+    /// 正在下载同一个远程资源，进度可能尚未产生。
+    case downloading(progress: Double?)
+    /// 没有可复用缓存，也没有正在进行的下载。
+    case missing
+}
+
 private extension SVGAViewSource {
     var usesLocalResourceFrameSize: Bool {
         switch self {
@@ -587,6 +597,69 @@ open class SVGAView: UIView {
         progressHandler: SVGAViewPreloadProgressHandler? = nil
     ) async throws {
         try await preload(.data(data, cacheKey: cacheKey), progressHandler: progressHandler)
+    }
+
+    // MARK: - Cache
+
+    /// 查询指定来源的缓存状态。
+    ///
+    /// 已完成缓存会返回 `.cached(localPath:)`；远程资源正在下载时会返回
+    /// `.downloading(progress:)`；其余情况返回 `.missing`。
+    ///
+    /// - Parameter source: 动画数据来源。
+    /// - Returns: 指定来源的缓存状态。
+    @concurrent public nonisolated static func cacheStatus(_ source: SVGAViewSource) async -> SVGACacheStatus {
+        switch source {
+        case .named(let name, let bundle):
+            return await SVGAParser.shared.cacheStatus(named: name, in: bundle)
+        case .remoteURL(let url):
+            guard (try? validateRemoteURL(url)) != nil else { return .missing }
+            return await SVGAParser.shared.cacheStatus(url: url)
+        case .request(let request):
+            guard let url = request.url,
+                  (try? validateRemoteURL(url)) != nil else {
+                return .missing
+            }
+            return await SVGAParser.shared.cacheStatus(request: request)
+        case .fileURL(let url):
+            guard url.isFileURL else { return .missing }
+            return await SVGAParser.shared.cacheStatus(fileURL: url)
+        case .data(_, let cacheKey):
+            return await SVGAParser.shared.cacheStatus(dataCacheKey: cacheKey)
+        }
+    }
+
+    /// 查询 bundle 中 SVGA 资源的缓存状态。
+    @concurrent public nonisolated static func cacheStatus(
+        named name: String,
+        in bundle: Bundle? = nil
+    ) async -> SVGACacheStatus {
+        await cacheStatus(.named(name, bundle: bundle))
+    }
+
+    /// 查询 HTTP 或 HTTPS SVGA 文件的缓存状态。
+    @concurrent public nonisolated static func cacheStatus(remoteURL url: URL) async -> SVGACacheStatus {
+        await cacheStatus(.remoteURL(url))
+    }
+
+    /// 查询自定义请求对应 SVGA 文件的缓存状态。
+    @concurrent public nonisolated static func cacheStatus(request: URLRequest) async -> SVGACacheStatus {
+        await cacheStatus(.request(request))
+    }
+
+    /// 查询本地文件 URL 指向 SVGA 文件的缓存状态。
+    @concurrent public nonisolated static func cacheStatus(fileURL: URL) async -> SVGACacheStatus {
+        await cacheStatus(.fileURL(fileURL))
+    }
+
+    /// 查询内存中 SVGA 数据指定 cache key 对应的缓存状态。
+    @concurrent public nonisolated static func cacheStatus(data: Data, cacheKey: String) async -> SVGACacheStatus {
+        await cacheStatus(.data(data, cacheKey: cacheKey))
+    }
+
+    /// 查询调用方指定 data cache key 对应的缓存状态。
+    @concurrent public nonisolated static func cacheStatus(dataCacheKey cacheKey: String) async -> SVGACacheStatus {
+        await SVGAParser.shared.cacheStatus(dataCacheKey: cacheKey)
     }
 
     // MARK: - Play
