@@ -224,6 +224,57 @@ func concurrentPreloadAndViewLoadShareInFlightRequest() async throws {
 
 @MainActor
 @Test
+func concurrentPreloadAndViewLoadBothReceiveInFlightProgress() async throws {
+    guard let url = Bundle.module.url(forResource: "banner", withExtension: "svga") else {
+        throw SVGAParserError.resourceNotFound("banner.svga")
+    }
+    ChunkedSVGAURLProtocol.responseData = try Data(contentsOf: url)
+    SVGAURLSessionTestHooks.protocolClasses = [
+        ChunkedSVGAURLProtocol.self,
+        NeverFinishingSVGAURLProtocol.self
+    ]
+    let preloadURL = URL(string: "https://svga-progress.test/in-flight-progress-\(UUID().uuidString).svga")!
+    ChunkedSVGAURLProtocol.resetRequestCount(for: preloadURL)
+    ChunkedSVGAURLProtocol.setResponseDelay(0.25, for: preloadURL)
+    let request = URLRequest(
+        url: preloadURL,
+        cachePolicy: .reloadIgnoringLocalCacheData,
+        timeoutInterval: 5
+    )
+    let preloadRecorder = ProgressRecorder()
+    let viewRecorder = ProgressRecorder()
+    let preloadTask = Task.detached {
+        try await SVGAView.preload(.request(request)) { progress in
+            preloadRecorder.record(progress)
+        }
+    }
+
+    for _ in 0..<1_000 where !preloadRecorder.values.contains(where: { $0 > 0 && $0 < 1 }) {
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    #expect(preloadRecorder.values.contains { $0 > 0 && $0 < 1 })
+
+    let view = SVGAView()
+    view.onEvent = { event in
+        guard case .downloadProgress(let progress) = event else { return }
+        viewRecorder.record(progress)
+    }
+    try await view.load(.request(request))
+    try await preloadTask.value
+
+    for _ in 0..<200 where viewRecorder.values.last != 1.0 {
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    let viewValues = viewRecorder.values
+    #expect(ChunkedSVGAURLProtocol.requestCount(for: preloadURL) == 1)
+    #expect(view.state == .ready)
+    #expect(viewValues.contains { $0 > 0 && $0 < 1 }, "expected an intermediate progress value, got \(viewValues)")
+    #expect(viewValues.last == 1.0, "expected final progress to be 1.0, got \(viewValues)")
+}
+
+@MainActor
+@Test
 func resourcePathInitializerUsesLoadedVideoSizeWhenFrameIsZero() async throws {
     let entity = try await SVGAParser.shared.parse(named: "banner", in: .module)
     guard let fileURL = Bundle.module.url(forResource: "banner", withExtension: "svga") else {

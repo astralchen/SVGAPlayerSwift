@@ -31,11 +31,15 @@ actor SVGAParser {
     private struct InFlightParse {
         let task: Task<SVGA.VideoEntity, Error>
         var waiterIDs: Set<UUID>
+        var progressHandlers: [UUID: SVGADownloadProgressHandler]
+        var lastProgress: Double?
     }
 
     private struct InFlightWaiter {
         let id: UUID
         let task: Task<SVGA.VideoEntity, Error>
+        let progressHandler: SVGADownloadProgressHandler?
+        let progressToReplay: Double?
     }
 
     private var inFlightParses: [String: InFlightParse] = [:]
@@ -78,25 +82,29 @@ actor SVGAParser {
             }
             try? FileManager.default.removeItem(at: cacheDir)
         }
-        if let waiter = addWaiterToInFlightParse(cacheKey: key) {
+        if let waiter = addWaiterToInFlightParse(cacheKey: key, progressHandler: progressHandler) {
             return try await awaitInFlightParse(
                 waiter,
-                cacheKey: key,
-                progressHandler: progressHandler
+                cacheKey: key
             )
         }
 
         let maximumSize = maxDownloadSize
-        let task = Task { [request, key, maximumSize, progressHandler] in
+        let task = Task { [request, key, maximumSize] in
             let data = try await SVGADataDownloader.download(
                 request: request,
                 maximumSize: maximumSize,
-                progressHandler: progressHandler
+                progressHandler: { progress in
+                    Task {
+                        let recorded = await self.recordInFlightProgress(progress, cacheKey: key)
+                        recorded.handlers.forEach { $0(recorded.progress) }
+                    }
+                }
             )
             return try await self.parseData(data, cacheKey: key)
         }
-        let waiter = storeInFlightParse(task, cacheKey: key)
-        return try await awaitInFlightParse(waiter, cacheKey: key, progressHandler: nil)
+        let waiter = storeInFlightParse(task, cacheKey: key, progressHandler: progressHandler)
+        return try await awaitInFlightParse(waiter, cacheKey: key)
     }
 
     /// 从原始数据解析 SVGA 文件。
@@ -202,35 +210,76 @@ actor SVGAParser {
         }
     }
 
-    private func addWaiterToInFlightParse(cacheKey key: String) -> InFlightWaiter? {
+    private func addWaiterToInFlightParse(
+        cacheKey key: String,
+        progressHandler: SVGADownloadProgressHandler?
+    ) -> InFlightWaiter? {
         guard var inFlight = inFlightParses[key] else { return nil }
         let waiterID = UUID()
         inFlight.waiterIDs.insert(waiterID)
+        if let progressHandler {
+            inFlight.progressHandlers[waiterID] = progressHandler
+        }
         inFlightParses[key] = inFlight
-        return InFlightWaiter(id: waiterID, task: inFlight.task)
+        return InFlightWaiter(
+            id: waiterID,
+            task: inFlight.task,
+            progressHandler: progressHandler,
+            progressToReplay: inFlight.lastProgress
+        )
     }
 
     private func storeInFlightParse(
         _ task: Task<SVGA.VideoEntity, Error>,
-        cacheKey key: String
+        cacheKey key: String,
+        progressHandler: SVGADownloadProgressHandler?
     ) -> InFlightWaiter {
         let waiterID = UUID()
-        inFlightParses[key] = InFlightParse(task: task, waiterIDs: [waiterID])
-        return InFlightWaiter(id: waiterID, task: task)
+        var progressHandlers: [UUID: SVGADownloadProgressHandler] = [:]
+        if let progressHandler {
+            progressHandlers[waiterID] = progressHandler
+        }
+        inFlightParses[key] = InFlightParse(
+            task: task,
+            waiterIDs: [waiterID],
+            progressHandlers: progressHandlers,
+            lastProgress: nil
+        )
+        return InFlightWaiter(
+            id: waiterID,
+            task: task,
+            progressHandler: progressHandler,
+            progressToReplay: nil
+        )
+    }
+
+    private func recordInFlightProgress(
+        _ progress: Double,
+        cacheKey key: String
+    ) -> (progress: Double, handlers: [SVGADownloadProgressHandler]) {
+        let boundedProgress = min(1.0, max(0.0, progress))
+        guard var inFlight = inFlightParses[key] else {
+            return (boundedProgress, [])
+        }
+        inFlight.lastProgress = boundedProgress
+        let handlers = Array(inFlight.progressHandlers.values)
+        inFlightParses[key] = inFlight
+        return (boundedProgress, handlers)
     }
 
     private func awaitInFlightParse(
         _ waiter: InFlightWaiter,
-        cacheKey key: String,
-        progressHandler: SVGADownloadProgressHandler?
+        cacheKey key: String
     ) async throws -> SVGA.VideoEntity {
         defer {
             releaseInFlightParseWaiter(cacheKey: key, waiterID: waiter.id)
         }
+        if let progress = waiter.progressToReplay {
+            waiter.progressHandler?(progress)
+        }
         let entity = try await withTaskCancellationHandler {
             let entity = try await waiter.task.value
             try Task.checkCancellation()
-            progressHandler?(1.0)
             return entity
         } onCancel: {
             Task {
@@ -244,6 +293,8 @@ actor SVGAParser {
         guard var inFlight = inFlightParses[key],
               inFlight.waiterIDs.remove(waiterID) != nil
         else { return }
+
+        inFlight.progressHandlers[waiterID] = nil
 
         if inFlight.waiterIDs.isEmpty {
             inFlight.task.cancel()
